@@ -96,7 +96,9 @@ int main()
     juce::ScopedJuceInitialiser_GUI juce;
     bool ok = true;
 
-    TocadiscosStopProcessor proc;
+    // En el heap, como lo crea un host (el procesador ocupa bastante memoria).
+    auto procPtr = std::make_unique<TocadiscosStopProcessor>();
+    auto& proc = *procPtr;
     FakePlayHead head;
     proc.setPlayHead (&head);
     proc.setPlayConfigDetails (2, 2, sr, block);
@@ -155,9 +157,9 @@ int main()
     {
         juce::MemoryBlock state;
         proc.getStateInformation (state);
-        TocadiscosStopProcessor restored;
-        restored.setStateInformation (state.getData(), (int) state.getSize());
-        ok &= check (restored.getStopPosition() == stopAt, "Punto guardado y recuperado", (double) (restored.getStopPosition() - stopAt));
+        auto restored = std::make_unique<TocadiscosStopProcessor>();
+        restored->setStateInformation (state.getData(), (int) state.getSize());
+        ok &= check (restored->getStopPosition() == stopAt, "Punto guardado y recuperado", (double) (restored->getStopPosition() - stopAt));
     }
 
     // Código de tiempo: 01:05:47:01 a 25 fps.

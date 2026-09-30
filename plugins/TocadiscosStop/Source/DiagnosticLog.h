@@ -9,7 +9,7 @@
 // la escritura en disco se hace desde el hilo de mensajes con un temporizador.
 
 #include <juce_audio_processors/juce_audio_processors.h>
-#include <array>
+#include <vector>
 
 class DiagnosticLog : private juce::Timer
 {
@@ -112,7 +112,7 @@ private:
     static constexpr int maxLines = 200000;
 
     juce::AbstractFifo fifo { capacity };
-    std::array<Entry, capacity> entries {};
+    std::vector<Entry> entries = std::vector<Entry> ((size_t) capacity); // en el heap: son ~800 KB
     std::atomic<int> dropped { 0 };
 
     double startMs = 0.0;
