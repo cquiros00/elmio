@@ -66,3 +66,33 @@ jobs:
         with:
           name: TocadiscosStop-${{ matrix.name }}
           path: dist
+
+  # Copia los plugins compilados a la rama "binarios" para poder descargarlos
+  # con git (sin pasar por la página de Actions).
+  publicar:
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artefactos
+
+      - name: Subir a la rama binarios
+        run: |
+          mkdir binarios
+          for d in artefactos/*/; do
+            n=$(basename "$d")
+            (cd "$d" && zip -qr "../../binarios/$n.zip" .)
+          done
+          cd binarios
+          echo "Compilado desde ${GITHUB_SHA} (${GITHUB_REF_NAME})" > LEEME.txt
+          git init -q
+          git checkout -q -b binarios
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add .
+          git commit -qm "Plugins compilados desde ${GITHUB_SHA}"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" binarios
