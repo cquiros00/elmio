@@ -53,6 +53,17 @@ Copia `Tocadiscos Stop.vst3` en la carpeta de plugins VST3 de tu sistema:
 | macOS | `/Library/Audio/Plug-Ins/VST3/` (y `Tocadiscos Stop.component` en `/Library/Audio/Plug-Ins/Components/`) |
 | Linux | `~/.vst3/` |
 
+**Windows:** si la carpeta `VST3` no existe (es normal si nunca has instalado un plugin VST3),
+créala tú. En Windows en español el Explorador muestra la ruta como *Archivos de programa →
+Archivos comunes*, pero es la misma carpeta. También puedes crearla desde PowerShell abierto
+como administrador:
+
+```powershell
+New-Item -ItemType Directory -Force "C:\Program Files\Common Files\VST3"
+```
+
+`Tocadiscos Stop.vst3` es una **carpeta**, no un archivo suelto: cópiala entera.
+
 **macOS:** el plugin no está firmado con un certificado de Apple, así que es posible que el
 sistema lo bloquee. Quita la marca de cuarentena desde el Terminal:
 
