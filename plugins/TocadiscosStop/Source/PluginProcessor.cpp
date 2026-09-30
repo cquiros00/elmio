@@ -53,16 +53,8 @@ bool TocadiscosStopProcessor::isBusesLayoutSupported (const BusesLayout& layouts
     return layouts.getMainInputChannelSet() == out;
 }
 
-void TocadiscosStopProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
+void TocadiscosStopProcessor::prepareToPlay (double sampleRate, int)
 {
-    hostResets.fetch_add (1, std::memory_order_relaxed);
-
-    DiagnosticLog::Entry e;
-    e.type       = DiagnosticLog::Type::Prepare;
-    e.numSamples = samplesPerBlock;
-    e.extra      = sampleRate;
-    diagnostics.push (e);
-
     // Algunos hosts vuelven a llamar a prepareToPlay en mitad de la
     // reproducción (por ejemplo al cambiar un parámetro). Si la configuración
     // no ha cambiado no se toca el motor, para no cortar un frenado en curso.
@@ -77,19 +69,8 @@ void TocadiscosStopProcessor::prepareToPlay (double sampleRate, int samplesPerBl
 
 void TocadiscosStopProcessor::reset()
 {
-    // A propósito no se reinicia el motor: ver prepareToPlay.
-    hostResets.fetch_add (1, std::memory_order_relaxed);
-
-    DiagnosticLog::Entry e;
-    e.type = DiagnosticLog::Type::Reset;
-    diagnostics.push (e);
-}
-
-void TocadiscosStopProcessor::releaseResources()
-{
-    DiagnosticLog::Entry e;
-    e.type = DiagnosticLog::Type::Release;
-    diagnostics.push (e);
+    // A propósito no se reinicia el motor: el efecto depende solo de la
+    // posición en la línea de tiempo (ver TurntableEngine).
 }
 
 void TocadiscosStopProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
@@ -101,9 +82,6 @@ void TocadiscosStopProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 
     const int numSamples = buffer.getNumSamples();
 
-    DiagnosticLog::Entry logEntry;
-    logEntry.numSamples = numSamples;
-
     // Posición de este bloque en la línea de tiempo. DaVinci Resolve la
     // informa con exactitud; si un host no lo hace, se usa un contador propio.
     int64_t blockPos = fallbackPosition;
@@ -111,12 +89,8 @@ void TocadiscosStopProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
     {
         if (auto pos = ph->getPosition())
         {
-            logEntry.playing = pos->getIsPlaying() ? 1 : 0;
             if (auto samplePos = pos->getTimeInSamples())
-            {
                 blockPos = *samplePos;
-                logEntry.samplePos = blockPos;
-            }
             if (auto fps = pos->getFrameRate())
                 hostFrameRate.store (fps->getEffectiveRate());
         }
@@ -133,11 +107,6 @@ void TocadiscosStopProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 
     const int64_t stopPos = stopPosition.load();
     engine.process (buffer.getArrayOfWritePointers(), buffer.getNumChannels(), numSamples, blockPos, stopPos, p);
-
-    logEntry.engage = stopPos >= 0 ? 1.0f : 0.0f;
-    logEntry.rate   = getCurrentRate();
-    logEntry.extra  = (double) stopPos;
-    diagnostics.push (logEntry);
 }
 
 void TocadiscosStopProcessor::setStopPosition (int64_t samples)

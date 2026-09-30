@@ -66,12 +66,6 @@ void VinylDisplay::paint (juce::Graphics& g)
     g.setFont (juce::FontOptions (13.0f));
     g.drawText (juce::String (juce::roundToInt (shownRate * 100.0f)) + " %",
                 disc.withTrimmedTop (size * 0.62f).withHeight (18.0f), juce::Justification::centred);
-
-    // Diagnóstico: cuántas veces ha reiniciado el host el procesado.
-    g.setColour (Colours::dimText);
-    g.setFont (juce::FontOptions (10.0f));
-    g.drawText ("Reinicios del host: " + juce::String (processor.hostResets.load()),
-                getLocalBounds().removeFromBottom (12), juce::Justification::centredRight);
 }
 
 //==============================================================================
@@ -234,10 +228,6 @@ void TocadiscosStopEditor::paint (juce::Graphics& g)
     g.setColour (Colours::dimText);
     g.setFont (juce::FontOptions (12.0f));
     g.drawText ("Elmio", getWidth() - 120, 12, 100, 26, juce::Justification::centredRight);
-
-    g.setFont (juce::FontOptions (10.0f));
-    g.drawText ("Diagnostico en Documentos: " + processor.diagnostics.getFileName(),
-                20, getHeight() - 16, getWidth() - 40, 12, juce::Justification::centredRight);
 
     g.setColour (Colours::panel);
     g.fillRoundedRectangle (juce::Rectangle<float> (270.0f, 50.0f, (float) getWidth() - 290.0f, 250.0f), 8.0f);

@@ -2,7 +2,6 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "TurntableEngine.h"
-#include "DiagnosticLog.h"
 
 namespace ParamIDs
 {
@@ -21,7 +20,7 @@ public:
     TocadiscosStopProcessor();
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
-    void releaseResources() override;
+    void releaseResources() override {}
     void reset() override;
     bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
@@ -56,12 +55,6 @@ public:
     // Frecuencia de muestreo y fotogramas por segundo que informa el host (0 = desconocido).
     double  getHostSampleRate() const noexcept { return hostSampleRate.load(); }
     double  getHostFrameRate() const noexcept  { return hostFrameRate.load(); }
-
-    // Veces que el host ha reiniciado el procesado (se muestra en la interfaz para diagnosticar).
-    std::atomic<int> hostResets { 0 };
-
-    // Registro de diagnóstico (archivo en Documentos).
-    DiagnosticLog diagnostics;
 
     juce::AudioProcessorValueTreeState apvts;
 

@@ -39,16 +39,11 @@ frena.
 
 La posición del cabezal se calcula a partir de la posición en la línea de tiempo, no de lo que
 sonó antes. Es importante porque DaVinci Resolve reinicia el plugin cada vez que pulsas
-reproducir y solo le envía audio mientras reproduce (lo vimos en el registro de diagnóstico):
+reproducir y solo le envía audio mientras reproduce:
 un efecto que dependiera del historial solo se oiría bien la primera vez.
 
 Si empiezas a reproducir en mitad del frenado, se oye el frenado desde ese punto; después del
 frenado, silencio.
-
-**Diagnóstico:** cada instancia del plugin guarda un registro en tu carpeta **Documentos**
-(`TocadiscosStop-diagnostico-….txt`) con lo que hace el host: posición del cabezal, estado de
-reproducción y reinicios. El nombre del archivo aparece abajo a la derecha en la ventana del
-plugin. No contiene audio ni datos personales; puedes borrarlo cuando quieras.
 
 ---
 
@@ -159,7 +154,6 @@ plugins/TocadiscosStop/Source/
   TurntableEngine.h    motor DSP (sin dependencias, reutilizable)
   PluginProcessor.*    parámetros, punto de parada y posición en la línea de tiempo
   Timecode.h           conversión entre muestras y código de tiempo
-  DiagnosticLog.h      registro de diagnóstico del host
   PluginEditor.*       interfaz con el disco giratorio
 tests/render_test.cpp     prueba offline del motor (genera un WAV)
 tests/processor_test.cpp  prueba del plugin imitando a DaVinci Resolve
