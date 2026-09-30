@@ -66,6 +66,12 @@ void VinylDisplay::paint (juce::Graphics& g)
     g.setFont (juce::FontOptions (13.0f));
     g.drawText (juce::String (juce::roundToInt (shownRate * 100.0f)) + " %",
                 disc.withTrimmedTop (size * 0.62f).withHeight (18.0f), juce::Justification::centred);
+
+    // Diagnóstico: cuántas veces ha reiniciado el host el procesado.
+    g.setColour (Colours::dimText);
+    g.setFont (juce::FontOptions (10.0f));
+    g.drawText ("Reinicios del host: " + juce::String (processor.hostResets.load()),
+                getLocalBounds().removeFromBottom (12), juce::Justification::centredRight);
 }
 
 //==============================================================================

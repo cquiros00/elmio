@@ -31,8 +31,12 @@ buffer cada vez más despacio (de 100 % a 0 %), con interpolación cúbica, que 
 pasa a una aguja sobre un disco que frena. Al volver a arrancar, cuando el disco alcanza la
 velocidad normal, se hace un fundido de 30 ms de vuelta al audio en directo.
 
-Si empiezas a reproducir (o saltas) a un punto de la línea de tiempo donde PARAR ya está
-activado, el efecto empieza directamente en silencio, sin volver a hacer el frenado.
+El frenado siempre se oye entero: si empiezas a reproducir desde un punto donde PARAR ya está
+activado, el disco frena desde ese momento. Para escuchar el efecto tal y como quedará,
+reproduce desde unos segundos antes del punto de parada.
+
+Debajo del disco, la interfaz muestra **Reinicios del host**: cuántas veces ha reiniciado
+Resolve el procesado del plugin. Es solo un dato de diagnóstico.
 
 ---
 

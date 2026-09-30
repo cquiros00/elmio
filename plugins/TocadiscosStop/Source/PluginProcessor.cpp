@@ -66,13 +66,24 @@ bool TocadiscosStopProcessor::isBusesLayoutSupported (const BusesLayout& layouts
 
 void TocadiscosStopProcessor::prepareToPlay (double sampleRate, int)
 {
-    engine.prepare (sampleRate, getTotalNumOutputChannels());
-    needsSnap = true;
+    hostResets.fetch_add (1, std::memory_order_relaxed);
+
+    // Algunos hosts vuelven a llamar a prepareToPlay en mitad de la
+    // reproducción (por ejemplo al cambiar un parámetro). Si la configuración
+    // no ha cambiado no se toca el motor, para no cortar un frenado en curso.
+    const int channels = getTotalNumOutputChannels();
+    if (std::abs (sampleRate - preparedSampleRate) < 1.0e-6 && channels == preparedChannels)
+        return;
+
+    engine.prepare (sampleRate, channels);
+    preparedSampleRate = sampleRate;
+    preparedChannels   = channels;
 }
 
 void TocadiscosStopProcessor::reset()
 {
-    needsSnap = true;
+    // A propósito no se reinicia el motor: ver prepareToPlay.
+    hostResets.fetch_add (1, std::memory_order_relaxed);
 }
 
 void TocadiscosStopProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
@@ -84,38 +95,18 @@ void TocadiscosStopProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 
     const bool engaged = engageParam->load() > 0.5f;
 
-    // Si la reproducción acaba de empezar o el cabezal ha saltado, colocar el
-    // plato directamente en el estado que marca la automatización: así, al
-    // reproducir desde un punto donde "Parar" ya está activo, se oye silencio
-    // en vez de un frenado que no corresponde.
-    //
-    // Solo cuenta como salto una diferencia grande (medio segundo): hay hosts,
-    // como DaVinci Resolve, que informan de la posición a saltos (por
-    // fotograma), y eso no debe cortar un frenado en curso.
+    // Al empezar a reproducir con "Parar" apagado, el disco arranca ya girando
+    // (sin un arranque residual de la reproducción anterior). Nunca se salta
+    // directamente al estado "parado": el frenado siempre se oye entero.
     if (auto* ph = getPlayHead())
     {
         if (auto pos = ph->getPosition())
         {
             const bool playing = pos->getIsPlaying();
-            if (playing && ! wasPlaying)
-                needsSnap = true;
-
-            if (auto samplePos = pos->getTimeInSamples())
-            {
-                const auto jumpThreshold = (int64_t) (0.5 * getSampleRate());
-                if (playing && wasPlaying && expectedSamplePos >= 0
-                    && std::llabs (*samplePos - expectedSamplePos) > jumpThreshold)
-                    needsSnap = true;
-                expectedSamplePos = *samplePos + buffer.getNumSamples();
-            }
+            if (playing && ! wasPlaying && ! engaged)
+                engine.snapTo (false);
             wasPlaying = playing;
         }
-    }
-
-    if (needsSnap)
-    {
-        engine.snapTo (engaged);
-        needsSnap = false;
     }
 
     TurntableEngine::Params p;

@@ -44,6 +44,9 @@ public:
 
     float getCurrentRate() const noexcept { return engine.currentRate.load (std::memory_order_relaxed); }
 
+    // Veces que el host ha reiniciado el procesado (se muestra en la interfaz para diagnosticar).
+    std::atomic<int> hostResets { 0 };
+
     juce::AudioProcessorValueTreeState apvts;
 
 private:
@@ -58,10 +61,9 @@ private:
     std::atomic<float>* toneParam      = nullptr;
     std::atomic<float>* fadeParam      = nullptr;
 
-    // Seguimiento del transporte para "re-sincronizar" al reproducir o saltar.
-    bool    needsSnap       = true;
-    bool    wasPlaying      = false;
-    int64_t expectedSamplePos = -1;
+    bool   wasPlaying         = false;
+    double preparedSampleRate = 0.0;
+    int    preparedChannels   = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (TocadiscosStopProcessor)
 };
