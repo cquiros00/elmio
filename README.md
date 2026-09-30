@@ -31,9 +31,17 @@ buffer cada vez más despacio (de 100 % a 0 %), con interpolación cúbica, que 
 pasa a una aguja sobre un disco que frena. Al volver a arrancar, cuando el disco alcanza la
 velocidad normal, se hace un fundido de 30 ms de vuelta al audio en directo.
 
-El frenado siempre se oye entero: si empiezas a reproducir desde un punto donde PARAR ya está
-activado, el disco frena desde ese momento. Para escuchar el efecto tal y como quedará,
-reproduce desde unos segundos antes del punto de parada.
+El frenado siempre se oye entero, y cada vez que vuelves a reproducir el disco empieza
+girando, así que puedes revisar el efecto las veces que quieras:
+
+- **Con automatización**, el frenado se repite solo en cada pasada, en el punto donde PARAR se
+  activa.
+- **Si pulsaste PARAR a mano** y se quedó encendido, en la siguiente reproducción la música
+  suena normal y el botón muestra **REPETIR**: púlsalo para volver a frenar.
+
+Si empiezas a reproducir desde un punto donde PARAR ya está activado, se oye la música (el disco
+no frena hasta que PARAR se apague y se vuelva a encender, o pulses REPETIR). Para escuchar el
+efecto tal y como quedará, reproduce desde unos segundos antes del punto de parada.
 
 Debajo del disco, la interfaz muestra **Reinicios del host**: cuántas veces ha reiniciado
 Resolve el procesado del plugin. Es solo un dato de diagnóstico.
@@ -99,6 +107,7 @@ sudo xattr -dr com.apple.quarantine "/Library/Audio/Plug-Ins/VST3/Tocadiscos Sto
 4. Reproduce y pulsa **PARAR** en la ventana del plugin justo en el momento en que quieres que
    el disco empiece a frenar. Resolve graba ese momento como automatización.
 5. Si quieres que la música vuelva, pulsa otra vez **PARAR** para soltarlo.
+6. Vuelve atrás y reproduce: el frenado se repite en el mismo punto cada vez.
 
 Después puedes mover el punto de automatización en la línea de tiempo para ajustar el momento
 exacto, o dibujarlo a mano en el carril de automatización del parámetro **Parar**.

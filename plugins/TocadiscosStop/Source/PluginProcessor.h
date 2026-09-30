@@ -44,6 +44,11 @@ public:
 
     float getCurrentRate() const noexcept { return engine.currentRate.load (std::memory_order_relaxed); }
 
+    // "Parar" sigue encendido de una reproducción anterior y el disco gira:
+    // la interfaz muestra REPETIR y requestRetrigger() vuelve a frenar.
+    bool isWaitingForRetrigger() const noexcept { return waitingForRetrigger.load (std::memory_order_relaxed); }
+    void requestRetrigger() noexcept            { retriggerRequested.store (true); }
+
     // Veces que el host ha reiniciado el procesado (se muestra en la interfaz para diagnosticar).
     std::atomic<int> hostResets { 0 };
 
@@ -61,7 +66,13 @@ private:
     std::atomic<float>* toneParam      = nullptr;
     std::atomic<float>* fadeParam      = nullptr;
 
-    bool   wasPlaying         = false;
+    double  lastBlockMs      = -1.0;
+    double  lastPlayingMs    = -1.0;
+    int64_t lastSamplePos    = -1;
+    bool    waitForRetrigger = false;
+    std::atomic<bool> waitingForRetrigger { false };
+    std::atomic<bool> retriggerRequested  { false };
+
     double preparedSampleRate = 0.0;
     int    preparedChannels   = 0;
 

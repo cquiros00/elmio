@@ -7,6 +7,7 @@
 #include "PluginProcessor.h"
 
 #include <cstdio>
+#include <thread>
 
 namespace
 {
@@ -87,6 +88,70 @@ Result run (HostQuirks q, double engageAt, double seconds)
     }
     return r;
 }
+
+// Dos pasadas por el mismo tramo, como cuando revisas el efecto en Resolve:
+// reproducir, parar el transporte, volver atrás y reproducir otra vez.
+// Devuelve la energía de la segunda pasada antes y después del punto de parada.
+struct TwoPass { double beforeStop = 0.0; double afterEngage = 0.0; double stoppedTail = 0.0; };
+
+TwoPass runTwoPasses (bool buttonStaysOn, bool hostReportsPlaying)
+{
+    constexpr double sr = 48000.0;
+    constexpr int block = 512;
+
+    TocadiscosStopProcessor proc;
+    FakePlayHead head;
+    proc.setPlayHead (&head);
+    proc.setPlayConfigDetails (2, 2, sr, block);
+    proc.prepareToPlay (sr, block);
+
+    auto* engage = proc.apvts.getParameter (ParamIDs::engage);
+    auto* stopT  = proc.apvts.getParameter (ParamIDs::stopTime);
+    stopT->setValueNotifyingHost (stopT->convertTo0to1 (1.5f));
+
+    juce::AudioBuffer<float> buf (2, block);
+    juce::MidiBuffer midi;
+    TwoPass result;
+
+    for (int pass = 0; pass < 2; ++pass)
+    {
+        head.playing = hostReportsPlaying;
+        for (int64_t pos = 0; pos < (int64_t) (3.0 * sr); pos += block)
+        {
+            head.reportedSamples = pos;
+            const double t = (double) pos / sr;
+
+            // Automatización: apagado antes de 1 s y encendido después.
+            // Botón manual: se pulsó en la primera pasada y sigue encendido.
+            const bool on = (buttonStaysOn && pass == 1) ? true : t >= 1.0;
+            engage->setValueNotifyingHost (on ? 1.0f : 0.0f);
+
+            // Con el botón encendido, el usuario pulsa REPETIR al llegar a 1 s.
+            if (buttonStaysOn && pass == 1 && pos == (int64_t) (1.0 * sr) / block * block + block)
+                proc.requestRetrigger();
+
+            for (int c = 0; c < 2; ++c)
+                for (int i = 0; i < block; ++i)
+                    buf.setSample (c, i, 0.5f * (float) std::sin (2.0 * juce::MathConstants<double>::pi * 440.0 * (double) (pos + i) / sr));
+
+            proc.processBlock (buf, midi);
+
+            double e = 0.0;
+            for (int i = 0; i < block; ++i)
+                e += std::abs (buf.getSample (0, i));
+            e /= block;
+
+            if (pass == 1 && t >= 2.5)              result.stoppedTail += e;
+            if (pass == 1 && t < 1.0)               result.beforeStop  += e;
+            if (pass == 1 && t >= 1.0 && t < 2.0)   result.afterEngage += e;
+        }
+
+        // El usuario para el transporte y vuelve al principio.
+        head.playing = false;
+        std::this_thread::sleep_for (std::chrono::milliseconds (400));
+    }
+    return result;
+}
 }
 
 int main()
@@ -111,6 +176,25 @@ int main()
         const bool pass = r.energyAfterEngage > 0.8 * normal.energyAfterEngage && r.energyWhenStopped < 0.01;
         std::printf ("%-40s tras PARAR: %6.2f  ya parado: %.4f  %s\n", c.name, r.energyAfterEngage, r.energyWhenStopped, pass ? "ok" : "FALLO");
         ok &= pass;
+    }
+
+    // Segunda pasada: tiene que volver a sonar la música antes del punto de
+    // parada y, con automatización, volver a oírse el frenado.
+    for (bool reports : { true, false })
+    {
+        const auto a = runTwoPasses (false, reports);
+        const bool passA = a.beforeStop > 0.9 * normal.energyAfterEngage && a.afterEngage > 0.8 * normal.energyAfterEngage
+                        && a.stoppedTail < 0.01;
+        std::printf ("2a pasada, automatizacion%-15s antes: %6.2f  frenado: %6.2f  %s\n",
+                     reports ? "" : " (sin transporte)", a.beforeStop, a.afterEngage, passA ? "ok" : "FALLO");
+        ok &= passA;
+
+        const auto b = runTwoPasses (true, reports);
+        const bool passB = b.beforeStop > 0.9 * normal.energyAfterEngage && b.afterEngage > 0.8 * normal.energyAfterEngage
+                        && b.stoppedTail < 0.01;
+        std::printf ("2a pasada, boton + REPETIR%-14s antes: %6.2f  frenado: %6.2f  %s\n",
+                     reports ? "" : " (sin transporte)", b.beforeStop, b.afterEngage, passB ? "ok" : "FALLO");
+        ok &= passB;
     }
 
     std::printf ("%s\n", ok ? "OK" : "FALLO");

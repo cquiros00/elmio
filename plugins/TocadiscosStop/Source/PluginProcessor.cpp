@@ -95,19 +95,50 @@ void TocadiscosStopProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 
     const bool engaged = engageParam->load() > 0.5f;
 
-    // Al empezar a reproducir con "Parar" apagado, el disco arranca ya girando
-    // (sin un arranque residual de la reproducción anterior). Nunca se salta
-    // directamente al estado "parado": el frenado siempre se oye entero.
+    // Cada vez que empieza una reproducción nueva el disco vuelve a girar, para
+    // poder revisar el efecto las veces que haga falta. Se considera
+    // reproducción nueva: el primer bloque, una pausa de más de 400 ms sin
+    // audio o sin transporte en marcha, o un salto hacia atrás del cabezal.
+    // Nunca se salta directamente al estado "parado": el frenado siempre se
+    // oye entero.
+    const double now = juce::Time::getMillisecondCounterHiRes();
+    bool newPlayback = lastBlockMs < 0.0 || now - lastBlockMs > 400.0;
+    lastBlockMs = now;
+
     if (auto* ph = getPlayHead())
     {
         if (auto pos = ph->getPosition())
         {
-            const bool playing = pos->getIsPlaying();
-            if (playing && ! wasPlaying && ! engaged)
-                engine.snapTo (false);
-            wasPlaying = playing;
+            if (pos->getIsPlaying())
+            {
+                if (lastPlayingMs >= 0.0 && now - lastPlayingMs > 400.0)
+                    newPlayback = true;
+                lastPlayingMs = now;
+            }
+
+            if (auto samplePos = pos->getTimeInSamples())
+            {
+                if (lastSamplePos >= 0 && *samplePos < lastSamplePos - (int64_t) (0.5 * getSampleRate()))
+                    newPlayback = true;
+                lastSamplePos = *samplePos;
+            }
         }
     }
+
+    if (newPlayback)
+    {
+        engine.snapTo (false);
+        // Si "Parar" sigue encendido de la vez anterior, no se vuelve a frenar
+        // hasta que se apague o se pulse REPETIR en la interfaz.
+        waitForRetrigger = engaged;
+    }
+
+    const bool retrigger = retriggerRequested.exchange (false);
+    if (! engaged || retrigger)
+        waitForRetrigger = false;
+
+    waitingForRetrigger.store (waitForRetrigger, std::memory_order_relaxed);
+    const bool engineEngaged = engaged && ! waitForRetrigger;
 
     TurntableEngine::Params p;
     p.stopSeconds  = stopTimeParam->load();
@@ -116,7 +147,7 @@ void TocadiscosStopProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
     p.tone         = toneParam->load();
     p.fade         = fadeParam->load();
 
-    engine.process (buffer.getArrayOfWritePointers(), buffer.getNumChannels(), buffer.getNumSamples(), engaged, p);
+    engine.process (buffer.getArrayOfWritePointers(), buffer.getNumChannels(), buffer.getNumSamples(), engineEngaged, p);
 }
 
 juce::AudioProcessorEditor* TocadiscosStopProcessor::createEditor()

@@ -18,7 +18,7 @@ private:
     float shownRate = 1.0f;
 };
 
-class TocadiscosStopEditor : public juce::AudioProcessorEditor
+class TocadiscosStopEditor : public juce::AudioProcessorEditor, private juce::Timer
 {
 public:
     explicit TocadiscosStopEditor (TocadiscosStopProcessor&);
@@ -36,13 +36,15 @@ private:
     };
 
     void setupKnob (Knob&, const char* paramID, const juce::String& text);
+    void stopButtonClicked();
+    void timerCallback() override;
 
     TocadiscosStopProcessor& processor;
     juce::LookAndFeel_V4 lnf;
 
     VinylDisplay vinyl;
     juce::TextButton stopButton { "PARAR" };
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> stopAttachment;
+    juce::RangedAudioParameter& engageParam;
 
     Knob stopTime, curve, startTime, tone, fade;
 

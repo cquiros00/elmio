@@ -76,7 +76,8 @@ void VinylDisplay::paint (juce::Graphics& g)
 
 //==============================================================================
 TocadiscosStopEditor::TocadiscosStopEditor (TocadiscosStopProcessor& p)
-    : AudioProcessorEditor (&p), processor (p), vinyl (p)
+    : AudioProcessorEditor (&p), processor (p), vinyl (p),
+      engageParam (*p.apvts.getParameter (ParamIDs::engage))
 {
     lnf.setColour (juce::Slider::rotarySliderFillColourId, Colours::accent);
     lnf.setColour (juce::Slider::rotarySliderOutlineColourId, juce::Colour (0xff3d3e44));
@@ -92,10 +93,12 @@ TocadiscosStopEditor::TocadiscosStopEditor (TocadiscosStopProcessor& p)
 
     addAndMakeVisible (vinyl);
 
-    stopButton.setClickingTogglesState (true);
+    stopButton.setClickingTogglesState (false);
     stopButton.setTooltip ("Activa para que el disco frene; desactiva para que vuelva a girar. Se puede automatizar.");
+    stopButton.onClick = [this] { stopButtonClicked(); };
     addAndMakeVisible (stopButton);
-    stopAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (p.apvts, ParamIDs::engage, stopButton);
+    timerCallback();
+    startTimerHz (15);
 
     setupKnob (stopTime,  ParamIDs::stopTime,  "Frenado");
     setupKnob (curve,     ParamIDs::curve,     "Curva");
@@ -106,8 +109,36 @@ TocadiscosStopEditor::TocadiscosStopEditor (TocadiscosStopProcessor& p)
     setSize (620, 340);
 }
 
+void TocadiscosStopEditor::stopButtonClicked()
+{
+    // Si "Parar" quedó encendido de una reproducción anterior, un clic vuelve
+    // a lanzar el frenado sin tocar el parámetro (ni la automatización).
+    if (processor.isWaitingForRetrigger())
+    {
+        processor.requestRetrigger();
+        return;
+    }
+
+    const bool on = engageParam.getValue() > 0.5f;
+    engageParam.beginChangeGesture();
+    engageParam.setValueNotifyingHost (on ? 0.0f : 1.0f);
+    engageParam.endChangeGesture();
+}
+
+void TocadiscosStopEditor::timerCallback()
+{
+    const bool waiting = processor.isWaitingForRetrigger();
+    const bool on      = engageParam.getValue() > 0.5f;
+
+    stopButton.setToggleState (on && ! waiting, juce::dontSendNotification);
+    stopButton.setButtonText (waiting ? "REPETIR" : "PARAR");
+    stopButton.setTooltip (waiting ? "PARAR sigue activado de la reproduccion anterior. Pulsa para volver a frenar."
+                                   : "Activa para que el disco frene; desactiva para que vuelva a girar. Se puede automatizar.");
+}
+
 TocadiscosStopEditor::~TocadiscosStopEditor()
 {
+    stopTimer();
     setLookAndFeel (nullptr);
 }
 
