@@ -1,0 +1,6 @@
+build/
+build-*/
+*.wav
+.DS_Store
+.vs/
+.vscode/

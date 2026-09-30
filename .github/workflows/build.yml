@@ -1,0 +1,68 @@
+name: Compilar plugins
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+          - name: macOS
+            os: macos-latest
+          - name: Linux
+            os: ubuntu-22.04
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dependencias (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libx11-dev libxcomposite-dev libxcursor-dev \
+            libxext-dev libxinerama-dev libxrandr-dev libxrender-dev libfreetype6-dev \
+            libfontconfig1-dev libgl1-mesa-dev
+
+      - name: Configurar
+        shell: bash
+        run: |
+          EXTRA=""
+          if [ "$RUNNER_OS" = "macOS" ]; then EXTRA='-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64'; fi
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release $EXTRA
+
+      - name: Compilar
+        run: cmake --build build --config Release --parallel 4
+
+      - name: Prueba offline del motor
+        working-directory: build
+        run: ctest -C Release --output-on-failure
+
+      - name: Firma ad-hoc (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          ART=build/plugins/TocadiscosStop/TocadiscosStop_artefacts/Release
+          codesign --force --deep -s - "$ART/VST3/Tocadiscos Stop.vst3"
+          codesign --force --deep -s - "$ART/AU/Tocadiscos Stop.component"
+
+      - name: Preparar paquete
+        shell: bash
+        run: |
+          ART=build/plugins/TocadiscosStop/TocadiscosStop_artefacts/Release
+          mkdir -p dist
+          cp -R "$ART/VST3/Tocadiscos Stop.vst3" dist/
+          if [ -d "$ART/AU" ]; then cp -R "$ART/AU/Tocadiscos Stop.component" dist/; fi
+          cp README.md dist/LEEME.md
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TocadiscosStop-${{ matrix.name }}
+          path: dist
