@@ -38,6 +38,12 @@ reproduce desde unos segundos antes del punto de parada.
 Debajo del disco, la interfaz muestra **Reinicios del host**: cuántas veces ha reiniciado
 Resolve el procesado del plugin. Es solo un dato de diagnóstico.
 
+**Versión de diagnóstico:** mientras se ajusta el comportamiento en Resolve, cada instancia del
+plugin guarda un registro en tu carpeta **Documentos** (`TocadiscosStop-diagnostico-….txt`)
+con lo que hace el host: posición del cabezal, estado de reproducción, valor de PARAR y
+reinicios. El nombre del archivo aparece abajo a la derecha en la ventana del plugin. No
+contiene audio ni datos personales; puedes borrarlo cuando quieras.
+
 ---
 
 ## Instalación

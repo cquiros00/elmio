@@ -134,6 +134,10 @@ void TocadiscosStopEditor::paint (juce::Graphics& g)
     g.setFont (juce::FontOptions (12.0f));
     g.drawText ("Elmio", getWidth() - 120, 12, 100, 26, juce::Justification::centredRight);
 
+    g.setFont (juce::FontOptions (10.0f));
+    g.drawText ("Diagnostico en Documentos: " + processor.diagnostics.getFileName(),
+                270, getHeight() - 18, getWidth() - 290, 14, juce::Justification::centredRight);
+
     g.setColour (Colours::panel);
     g.fillRoundedRectangle (juce::Rectangle<float> (270.0f, 50.0f, (float) getWidth() - 290.0f, (float) getHeight() - 70.0f), 8.0f);
 }

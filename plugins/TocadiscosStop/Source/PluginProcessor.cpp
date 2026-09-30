@@ -64,9 +64,15 @@ bool TocadiscosStopProcessor::isBusesLayoutSupported (const BusesLayout& layouts
     return layouts.getMainInputChannelSet() == out;
 }
 
-void TocadiscosStopProcessor::prepareToPlay (double sampleRate, int)
+void TocadiscosStopProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     hostResets.fetch_add (1, std::memory_order_relaxed);
+
+    DiagnosticLog::Entry e;
+    e.type       = DiagnosticLog::Type::Prepare;
+    e.numSamples = samplesPerBlock;
+    e.extra      = sampleRate;
+    diagnostics.push (e);
 
     // Algunos hosts vuelven a llamar a prepareToPlay en mitad de la
     // reproducción (por ejemplo al cambiar un parámetro). Si la configuración
@@ -84,6 +90,17 @@ void TocadiscosStopProcessor::reset()
 {
     // A propósito no se reinicia el motor: ver prepareToPlay.
     hostResets.fetch_add (1, std::memory_order_relaxed);
+
+    DiagnosticLog::Entry e;
+    e.type = DiagnosticLog::Type::Reset;
+    diagnostics.push (e);
+}
+
+void TocadiscosStopProcessor::releaseResources()
+{
+    DiagnosticLog::Entry e;
+    e.type = DiagnosticLog::Type::Release;
+    diagnostics.push (e);
 }
 
 void TocadiscosStopProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
@@ -98,13 +115,26 @@ void TocadiscosStopProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
     // Al empezar a reproducir con "Parar" apagado, el disco arranca ya girando
     // (sin un arranque residual de la reproducción anterior). Nunca se salta
     // directamente al estado "parado": el frenado siempre se oye entero.
+    DiagnosticLog::Entry logEntry;
+    logEntry.numSamples = buffer.getNumSamples();
+    logEntry.engage     = engageParam->load();
+
     if (auto* ph = getPlayHead())
     {
         if (auto pos = ph->getPosition())
         {
             const bool playing = pos->getIsPlaying();
+            logEntry.playing = playing ? 1 : 0;
+            if (auto samplePos = pos->getTimeInSamples())
+                logEntry.samplePos = *samplePos;
+
             if (playing && ! wasPlaying && ! engaged)
+            {
                 engine.snapTo (false);
+                DiagnosticLog::Entry snap;
+                snap.type = DiagnosticLog::Type::Snap;
+                diagnostics.push (snap);
+            }
             wasPlaying = playing;
         }
     }
@@ -117,6 +147,10 @@ void TocadiscosStopProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
     p.fade         = fadeParam->load();
 
     engine.process (buffer.getArrayOfWritePointers(), buffer.getNumChannels(), buffer.getNumSamples(), engaged, p);
+
+    logEntry.state = (int) engine.getState();
+    logEntry.rate  = getCurrentRate();
+    diagnostics.push (logEntry);
 }
 
 juce::AudioProcessorEditor* TocadiscosStopProcessor::createEditor()
