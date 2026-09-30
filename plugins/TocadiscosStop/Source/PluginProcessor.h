@@ -6,13 +6,14 @@
 
 namespace ParamIDs
 {
-    inline constexpr const char* engage    = "engage";
     inline constexpr const char* stopTime  = "stopTime";
     inline constexpr const char* curve     = "curve";
-    inline constexpr const char* startTime = "startTime";
     inline constexpr const char* tone      = "tone";
     inline constexpr const char* fade      = "fade";
 }
+
+// Propiedad (no automatizable) que guarda el punto de parada en el proyecto.
+inline constexpr const char* stopPositionProperty = "stopPosition";
 
 class TocadiscosStopProcessor : public juce::AudioProcessor
 {
@@ -45,6 +46,17 @@ public:
 
     float getCurrentRate() const noexcept { return engine.currentRate.load (std::memory_order_relaxed); }
 
+    // Punto de parada en la línea de tiempo, en muestras (-1 = sin punto).
+    // Llamar desde el hilo de mensajes.
+    void    setStopPosition (int64_t samples);
+    int64_t getStopPosition() const noexcept { return stopPosition.load(); }
+
+    // Última posición que ha procesado el host (-1 = todavía no ha reproducido).
+    int64_t getLastPosition() const noexcept { return lastPosition.load(); }
+    // Frecuencia de muestreo y fotogramas por segundo que informa el host (0 = desconocido).
+    double  getHostSampleRate() const noexcept { return hostSampleRate.load(); }
+    double  getHostFrameRate() const noexcept  { return hostFrameRate.load(); }
+
     // Veces que el host ha reiniciado el procesado (se muestra en la interfaz para diagnosticar).
     std::atomic<int> hostResets { 0 };
 
@@ -58,14 +70,19 @@ private:
 
     TurntableEngine engine;
 
-    std::atomic<float>* engageParam    = nullptr;
     std::atomic<float>* stopTimeParam  = nullptr;
     std::atomic<float>* curveParam     = nullptr;
-    std::atomic<float>* startTimeParam = nullptr;
     std::atomic<float>* toneParam      = nullptr;
     std::atomic<float>* fadeParam      = nullptr;
 
-    bool   wasPlaying         = false;
+    std::atomic<int64_t> stopPosition   { -1 };
+    std::atomic<int64_t> lastPosition   { -1 };
+    std::atomic<double>  hostSampleRate { 0.0 };
+    std::atomic<double>  hostFrameRate  { 0.0 };
+
+    // Posición propia para hosts que no informan de la posición.
+    int64_t fallbackPosition = 0;
+
     double preparedSampleRate = 0.0;
     int    preparedChannels   = 0;
 

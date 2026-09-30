@@ -2,6 +2,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "PluginProcessor.h"
+#include "Timecode.h"
 
 // Disco de vinilo que gira a la velocidad real del motor.
 class VinylDisplay : public juce::Component, private juce::Timer
@@ -18,7 +19,7 @@ private:
     float shownRate = 1.0f;
 };
 
-class TocadiscosStopEditor : public juce::AudioProcessorEditor
+class TocadiscosStopEditor : public juce::AudioProcessorEditor, private juce::Timer
 {
 public:
     explicit TocadiscosStopEditor (TocadiscosStopProcessor&);
@@ -36,15 +37,28 @@ private:
     };
 
     void setupKnob (Knob&, const char* paramID, const juce::String& text);
+    void timerCallback() override;
+
+    void markHere();
+    void nudge (int frames);
+    void applyTypedTimecode();
+    void refreshTimecode();
 
     TocadiscosStopProcessor& processor;
     juce::LookAndFeel_V4 lnf;
 
     VinylDisplay vinyl;
-    juce::TextButton stopButton { "PARAR" };
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> stopAttachment;
+    juce::TextButton markButton  { juce::String::fromUTF8 ("PARAR AQU\xc3\x8d") };
+    juce::Label      pointLabel;
+    juce::TextEditor timecodeEditor;
+    juce::TextButton minusButton { "-1" };
+    juce::TextButton plusButton  { "+1" };
+    juce::TextButton clearButton { "Quitar" };
+    juce::Label      hintLabel;
 
-    Knob stopTime, curve, startTime, tone, fade;
+    Knob stopTime, curve, tone, fade;
+
+    int64_t shownStopPosition = -2;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (TocadiscosStopEditor)
 };

@@ -50,8 +50,7 @@ public:
                 << "Host: " << juce::PluginHostType().getHostDescription()
                 << "  Formato: " << juce::AudioProcessor::getWrapperTypeDescription (juce::PluginHostType::getPluginLoadedAs())
                 << "\n"
-                << "Columnas: ms tipo muestras reproduciendo posicion parar estado velocidad extra\n"
-                << "Estados: 0=girando 1=frenando 2=parado 3=arrancando 4=volviendo\n\n";
+                << "Columnas: ms tipo muestras reproduciendo posicion hayPunto - velocidad puntoDeParada\n\n";
         stream->flush();
         startTimer (250);
     }

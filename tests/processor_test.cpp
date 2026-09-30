@@ -1,91 +1,93 @@
-// Prueba del plugin completo con un "host" simulado.
+// Prueba del plugin completo imitando a DaVinci Resolve, según lo que mostró el
+// registro de diagnóstico:
+//   - solo envía audio mientras reproduce, en bloques de 480 muestras;
+//   - informa la posición exacta en la línea de tiempo (que empieza en
+//     01:00:00:00, es decir, 172 800 000 muestras a 48 kHz);
+//   - el primer bloque de cada reproducción es más corto;
+//   - antes de cada reproducción llama a reset, releaseResources y prepareToPlay.
 //
-// El frenado tiene que oírse entero pase lo que pase en el host: posición del
-// cabezal informada a saltos, reinicios del procesado (prepareToPlay/reset)
-// justo al pulsar "Parar", o el estado de reproducción parpadeando.
+// El efecto tiene que sonar igual en todas las pasadas.
 
 #include "PluginProcessor.h"
+#include "Timecode.h"
 
 #include <cstdio>
 
 namespace
 {
+constexpr double sr    = 48000.0;
+constexpr int    block = 480;
+constexpr int64_t timelineStart = 172800000; // 01:00:00:00
+
 struct FakePlayHead : juce::AudioPlayHead
 {
     int64_t reportedSamples = 0;
-    bool    playing = true;
 
     juce::Optional<PositionInfo> getPosition() const override
     {
         PositionInfo info;
-        info.setIsPlaying (playing);
+        info.setIsPlaying (true);
         info.setTimeInSamples (reportedSamples);
+        info.setFrameRate (juce::AudioPlayHead::fps25);
         return info;
     }
 };
 
-struct Result { double energyAfterEngage = 0.0; double energyWhenStopped = 0.0; };
-
-// Simula `seconds` de reproducción. `positionStep` = cada cuántas muestras
-// actualiza el host la posición que informa (1 = exacta).
-struct HostQuirks { int positionStep = 1; bool resetOnEngage = false; bool flickerPlaying = false; };
-
-Result run (HostQuirks q, double engageAt, double seconds)
+float inputAt (int64_t pos)
 {
-    constexpr double sr = 48000.0;
-    constexpr int block = 512;
+    return 0.5f * (float) std::sin (2.0 * juce::MathConstants<double>::pi * 440.0 * (double) pos / sr);
+}
 
-    TocadiscosStopProcessor proc;
-    FakePlayHead head;
-    proc.setPlayHead (&head);
-    proc.setPlayConfigDetails (2, 2, sr, block);
+// Reproduce desde `from` durante `seconds`. Devuelve el canal izquierdo.
+std::vector<float> play (TocadiscosStopProcessor& proc, FakePlayHead& head, int64_t from, double seconds)
+{
+    proc.reset();
+    proc.releaseResources();
     proc.prepareToPlay (sr, block);
 
-    auto* engage = proc.apvts.getParameter (ParamIDs::engage);
-    auto* stopT  = proc.apvts.getParameter (ParamIDs::stopTime);
-    stopT->setValueNotifyingHost (stopT->convertTo0to1 (1.5f));
-
+    std::vector<float> out;
     juce::AudioBuffer<float> buf (2, block);
     juce::MidiBuffer midi;
-    Result r;
-    int64_t pos = 0;
-    int64_t timeline = 0;
-    const int64_t total = (int64_t) (seconds * sr);
 
-    for (; pos < total; pos += block)
+    // Primer bloque corto, informado en la rejilla de 480 (como en el registro).
+    const int64_t grid = from / block * block;
+    int64_t pos = from;
+    bool first = true;
+    const int64_t end = from + (int64_t) (seconds * sr);
+
+    while (pos < end)
     {
-        head.reportedSamples = (timeline / q.positionStep) * q.positionStep;
-        head.playing = ! (q.flickerPlaying && (pos / block) % 7 == 3);
+        const int len = first ? (int) (grid + block - pos) : block;
+        head.reportedSamples = first ? grid : pos;
+        first = false;
 
-        const double t = (double) pos / sr;
-        const bool engageNow = t >= engageAt;
-        const bool justEngaged = engageNow && engage->getValue() < 0.5f;
-        engage->setValueNotifyingHost (engageNow ? 1.0f : 0.0f);
-
-        if (justEngaged && q.resetOnEngage)
-        {
-            proc.releaseResources();
-            proc.prepareToPlay (sr, block);
-            proc.reset();
-        }
-
+        buf.setSize (2, len, false, false, true);
         for (int c = 0; c < 2; ++c)
-            for (int i = 0; i < block; ++i)
-                buf.setSample (c, i, 0.5f * (float) std::sin (2.0 * juce::MathConstants<double>::pi * 440.0 * (double) (pos + i) / sr));
+            for (int i = 0; i < len; ++i)
+                buf.setSample (c, i, inputAt (pos + i));
 
         proc.processBlock (buf, midi);
-
-        double e = 0.0;
-        for (int i = 0; i < block; ++i)
-            e += std::abs (buf.getSample (0, i));
-        e /= block;
-
-        if (t >= engageAt && t < engageAt + 1.0)  r.energyAfterEngage += e;
-        if (t >= engageAt + 2.0)                  r.energyWhenStopped += e;
-
-        timeline += block;
+        for (int i = 0; i < len; ++i)
+            out.push_back (buf.getSample (0, i));
+        pos += len;
     }
-    return r;
+    return out;
+}
+
+double energy (const std::vector<float>& v, int64_t from, int64_t to)
+{
+    double e = 0.0;
+    from = std::max<int64_t> (0, from);
+    to   = std::min<int64_t> ((int64_t) v.size(), to);
+    for (int64_t i = from; i < to; ++i)
+        e += std::abs (v[(size_t) i]);
+    return to > from ? e / (double) (to - from) : 0.0;
+}
+
+bool check (bool condition, const char* name, double value)
+{
+    std::printf ("%-58s %8.4f  %s\n", name, value, condition ? "ok" : "FALLO");
+    return condition;
 }
 }
 
@@ -94,23 +96,76 @@ int main()
     juce::ScopedJuceInitialiser_GUI juce;
     bool ok = true;
 
-    const auto normal = run ({}, 1.0, 4.0);
-    std::printf ("%-40s tras PARAR: %6.2f  ya parado: %.4f\n", "Host exacto", normal.energyAfterEngage, normal.energyWhenStopped);
-    ok &= normal.energyAfterEngage > 10.0 && normal.energyWhenStopped < 0.01;
+    TocadiscosStopProcessor proc;
+    FakePlayHead head;
+    proc.setPlayHead (&head);
+    proc.setPlayConfigDetails (2, 2, sr, block);
 
-    const struct { const char* name; HostQuirks q; } cases[] = {
-        { "Posicion por fotograma (25 fps)",        { 1920, false, false } },
-        { "Reinicio del procesado al pulsar",       { 1,    true,  false } },
-        { "Estado de reproduccion parpadeando",     { 1,    false, true  } },
-        { "Todo a la vez",                          { 1920, true,  true  } },
-    };
+    auto* stopT = proc.apvts.getParameter (ParamIDs::stopTime);
+    stopT->setValueNotifyingHost (stopT->convertTo0to1 (1.5f));
 
-    for (const auto& c : cases)
+    const int64_t start  = timelineStart + (int64_t) (347.1 * sr); // 01:05:47 aprox.
+    const int64_t stopAt = start + (int64_t) (1.0 * sr);
+    const int64_t s1     = (int64_t) sr;                            // 1 s en muestras
+    const double  dry    = 0.5 * 2.0 / juce::MathConstants<double>::pi; // |seno| medio
+
+    // Sin punto de parada: la música pasa sin cambios.
     {
-        const auto r = run (c.q, 1.0, 4.0);
-        const bool pass = r.energyAfterEngage > 0.8 * normal.energyAfterEngage && r.energyWhenStopped < 0.01;
-        std::printf ("%-40s tras PARAR: %6.2f  ya parado: %.4f  %s\n", c.name, r.energyAfterEngage, r.energyWhenStopped, pass ? "ok" : "FALLO");
-        ok &= pass;
+        const auto out = play (proc, head, start, 1.0);
+        double maxDiff = 0.0;
+        for (size_t i = 0; i < out.size(); ++i)
+            maxDiff = std::max (maxDiff, (double) std::abs (out[i] - inputAt (start + (int64_t) i)));
+        ok &= check (maxDiff < 1.0e-6, "Sin punto de parada: salida = entrada (dif. max.)", maxDiff);
+    }
+
+    proc.setStopPosition (stopAt);
+
+    // Tres pasadas desde el mismo punto: tienen que ser idénticas.
+    const auto pass1 = play (proc, head, start, 3.5);
+    const auto pass2 = play (proc, head, start, 3.5);
+    const auto pass3 = play (proc, head, start, 3.5);
+
+    double diff = 0.0;
+    for (size_t i = 0; i < pass1.size(); ++i)
+        diff = std::max ({ diff, (double) std::abs (pass1[i] - pass2[i]), (double) std::abs (pass1[i] - pass3[i]) });
+
+    ok &= check (energy (pass1, 0, s1) > 0.95 * dry,            "Antes del punto: suena normal", energy (pass1, 0, s1));
+    ok &= check (energy (pass1, s1, s1 + s1) > 0.3 * dry,       "Frenando (1 s tras el punto): se oye", energy (pass1, s1, s1 + s1));
+    ok &= check (energy (pass1, s1 + (int64_t) (1.6 * sr), (int64_t) pass1.size()) < 1.0e-4,
+                 "Tras el frenado: silencio", energy (pass1, s1 + (int64_t) (1.6 * sr), (int64_t) pass1.size()));
+    ok &= check (diff < 1.0e-6, "Pasadas 1, 2 y 3 identicas (dif. max.)", diff);
+
+    // Reproducir empezando en mitad del frenado: se oye el final del frenado.
+    {
+        const auto mid = play (proc, head, stopAt + (int64_t) (0.5 * sr), 2.0);
+        ok &= check (energy (mid, 0, (int64_t) (0.5 * sr)) > 0.05 * dry, "Empezando a mitad del frenado: se oye", energy (mid, 0, (int64_t) (0.5 * sr)));
+        ok &= check (energy (mid, (int64_t) (1.1 * sr), (int64_t) mid.size()) < 1.0e-4, "  ... y acaba en silencio", energy (mid, (int64_t) (1.1 * sr), (int64_t) mid.size()));
+    }
+
+    // Reproducir después del frenado: silencio.
+    {
+        const auto after = play (proc, head, stopAt + 3 * s1, 1.0);
+        ok &= check (energy (after, 0, (int64_t) after.size()) < 1.0e-4, "Despues del frenado: silencio", energy (after, 0, (int64_t) after.size()));
+    }
+
+    // "PARAR AQUI" usa la última posición procesada.
+    ok &= check (proc.getLastPosition() == stopAt + 4 * s1, "Ultima posicion procesada", (double) (proc.getLastPosition() - stopAt));
+
+    // El punto de parada se guarda con el proyecto.
+    {
+        juce::MemoryBlock state;
+        proc.getStateInformation (state);
+        TocadiscosStopProcessor restored;
+        restored.setStateInformation (state.getData(), (int) state.getSize());
+        ok &= check (restored.getStopPosition() == stopAt, "Punto guardado y recuperado", (double) (restored.getStopPosition() - stopAt));
+    }
+
+    // Código de tiempo: 01:05:47:01 a 25 fps.
+    {
+        const auto tc = Timecode::format (189458560, sr, 25.0);
+        ok &= check (tc == "01:05:47:01", ("Codigo de tiempo " + tc).c_str(), 0.0);
+        ok &= check (Timecode::parse (tc, sr, 25.0) <= 189458560 && Timecode::format (Timecode::parse (tc, sr, 25.0), sr, 25.0) == tc,
+                     "Codigo de tiempo ida y vuelta", 0.0);
     }
 
     std::printf ("%s\n", ok ? "OK" : "FALLO");

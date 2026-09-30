@@ -1,6 +1,7 @@
-// Prueba offline del motor: genera una música sintética, aplica el efecto y
-// guarda el resultado en un WAV para escucharlo. También comprueba que no haya
-// valores no válidos ni picos y que el tramo "parado" esté en silencio.
+// Prueba offline del motor: genera una música sintética, aplica el efecto con
+// el punto de parada al 35 % y guarda el resultado en un WAV para escucharlo.
+// También comprueba que no haya valores no válidos ni picos y que, una vez
+// parado el disco, haya silencio.
 //
 //   g++ -std=c++17 -O2 -I plugins/TocadiscosStop/Source tests/render_test.cpp -o render_test
 //   ./render_test salida.wav [archivo_entrada.wav]
@@ -121,12 +122,12 @@ int main (int argc, char** argv)
 
     const int n = (int) audio[0].size();
     const double total = (double) n / sr;
-    const double engageAt  = total * 0.35;  // pulsar "Parar"
-    const double releaseAt = total * 0.75;  // soltar "Parar"
+    const int64_t stopPos = (int64_t) (total * 0.35 * sr);   // punto de parada
 
     TurntableEngine engine;
     engine.prepare (sr, (int) audio.size());
     TurntableEngine::Params p;
+    const int64_t stoppedFrom = stopPos + (int64_t) (p.stopSeconds * sr);
 
     const int block = 512;
     std::vector<float*> ptrs (audio.size());
@@ -135,11 +136,9 @@ int main (int argc, char** argv)
     {
         const int len = std::min (block, n - start);
         for (size_t c = 0; c < audio.size(); ++c) ptrs[c] = audio[c].data() + start;
-        const double t = (double) start / sr;
-        const bool engaged = t >= engageAt && t < releaseAt;
-        engine.process (ptrs.data(), (int) audio.size(), len, engaged, p);
-        if (engine.getState() == TurntableEngine::State::Stopped)
-            for (int i = 0; i < len; ++i) { stoppedEnergy += std::abs (audio[0][(size_t) (start + i)]); ++stoppedCount; }
+        engine.process (ptrs.data(), (int) audio.size(), len, start, stopPos, p);
+        for (int i = 0; i < len; ++i)
+            if (start + i >= stoppedFrom) { stoppedEnergy += std::abs (audio[0][(size_t) (start + i)]); ++stoppedCount; }
     }
 
     float peak = 0.0f; bool finite = true;
@@ -147,7 +146,7 @@ int main (int argc, char** argv)
         for (float v : c) { finite = finite && std::isfinite (v); peak = std::max (peak, std::abs (v)); }
 
     writeWav (outPath, audio, sr);
-    std::printf ("Escrito %s (%.2f s). Parar en %.2f s, soltar en %.2f s\n", outPath.c_str(), total, engageAt, releaseAt);
+    std::printf ("Escrito %s (%.2f s). Frena desde %.2f s durante %.2f s\n", outPath.c_str(), total, (double) stopPos / sr, (double) p.stopSeconds);
     std::printf ("Pico: %.3f  Valores finitos: %s  Muestras en silencio (parado): %d, nivel medio %.6f\n",
                  peak, finite ? "sí" : "NO", stoppedCount, stoppedCount ? stoppedEnergy / stoppedCount : 0.0);
 

@@ -7,10 +7,8 @@ TocadiscosStopProcessor::TocadiscosStopProcessor()
                           .withOutput ("Salida",  juce::AudioChannelSet::stereo(), true)),
       apvts (*this, nullptr, "TocadiscosStop", createLayout())
 {
-    engageParam    = apvts.getRawParameterValue (ParamIDs::engage);
     stopTimeParam  = apvts.getRawParameterValue (ParamIDs::stopTime);
     curveParam     = apvts.getRawParameterValue (ParamIDs::curve);
-    startTimeParam = apvts.getRawParameterValue (ParamIDs::startTime);
     toneParam      = apvts.getRawParameterValue (ParamIDs::tone);
     fadeParam      = apvts.getRawParameterValue (ParamIDs::fade);
 }
@@ -23,8 +21,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout TocadiscosStopProcessor::cre
     auto seconds = [] (float v, int) { return String (v, 2) + " s"; };
     auto percent = [] (float v, int) { return String (juce::roundToInt (v * 100.0f)) + " %"; };
 
-    layout.add (std::make_unique<AudioParameterBool> (ParameterID { ParamIDs::engage, 1 }, "Parar", false));
-
     layout.add (std::make_unique<AudioParameterFloat> (ParameterID { ParamIDs::stopTime, 1 }, "Tiempo de frenado",
         NormalisableRange<float> (0.1f, 10.0f, 0.01f, 0.5f), 2.5f,
         AudioParameterFloatAttributes().withLabel ("s").withStringFromValueFunction (seconds)));
@@ -36,13 +32,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout TocadiscosStopProcessor::cre
             if (v < 0.9f) return String (v, 2) + " (plato pesado)";
             if (v > 1.1f) return String (v, 2) + " (freno)";
             return String (v, 2) + " (natural)";
-        })));
-
-    layout.add (std::make_unique<AudioParameterFloat> (ParameterID { ParamIDs::startTime, 1 }, "Tiempo de arranque",
-        NormalisableRange<float> (0.0f, 5.0f, 0.01f, 0.5f), 0.6f,
-        AudioParameterFloatAttributes().withLabel ("s").withStringFromValueFunction ([] (float v, int)
-        {
-            return v < 0.001f ? String ("Instantaneo") : String (v, 2) + " s";
         })));
 
     layout.add (std::make_unique<AudioParameterFloat> (ParameterID { ParamIDs::tone, 1 }, "Oscurecer",
@@ -110,47 +99,51 @@ void TocadiscosStopProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
     for (auto i = getTotalNumInputChannels(); i < getTotalNumOutputChannels(); ++i)
         buffer.clear (i, 0, buffer.getNumSamples());
 
-    const bool engaged = engageParam->load() > 0.5f;
+    const int numSamples = buffer.getNumSamples();
 
-    // Al empezar a reproducir con "Parar" apagado, el disco arranca ya girando
-    // (sin un arranque residual de la reproducción anterior). Nunca se salta
-    // directamente al estado "parado": el frenado siempre se oye entero.
     DiagnosticLog::Entry logEntry;
-    logEntry.numSamples = buffer.getNumSamples();
-    logEntry.engage     = engageParam->load();
+    logEntry.numSamples = numSamples;
 
+    // Posición de este bloque en la línea de tiempo. DaVinci Resolve la
+    // informa con exactitud; si un host no lo hace, se usa un contador propio.
+    int64_t blockPos = fallbackPosition;
     if (auto* ph = getPlayHead())
     {
         if (auto pos = ph->getPosition())
         {
-            const bool playing = pos->getIsPlaying();
-            logEntry.playing = playing ? 1 : 0;
+            logEntry.playing = pos->getIsPlaying() ? 1 : 0;
             if (auto samplePos = pos->getTimeInSamples())
-                logEntry.samplePos = *samplePos;
-
-            if (playing && ! wasPlaying && ! engaged)
             {
-                engine.snapTo (false);
-                DiagnosticLog::Entry snap;
-                snap.type = DiagnosticLog::Type::Snap;
-                diagnostics.push (snap);
+                blockPos = *samplePos;
+                logEntry.samplePos = blockPos;
             }
-            wasPlaying = playing;
+            if (auto fps = pos->getFrameRate())
+                hostFrameRate.store (fps->getEffectiveRate());
         }
     }
+    fallbackPosition = blockPos + numSamples;
+    lastPosition.store (blockPos + numSamples);
+    hostSampleRate.store (getSampleRate());
 
     TurntableEngine::Params p;
-    p.stopSeconds  = stopTimeParam->load();
-    p.curve        = curveParam->load();
-    p.startSeconds = startTimeParam->load();
-    p.tone         = toneParam->load();
-    p.fade         = fadeParam->load();
+    p.stopSeconds = stopTimeParam->load();
+    p.curve       = curveParam->load();
+    p.tone        = toneParam->load();
+    p.fade        = fadeParam->load();
 
-    engine.process (buffer.getArrayOfWritePointers(), buffer.getNumChannels(), buffer.getNumSamples(), engaged, p);
+    const int64_t stopPos = stopPosition.load();
+    engine.process (buffer.getArrayOfWritePointers(), buffer.getNumChannels(), numSamples, blockPos, stopPos, p);
 
-    logEntry.state = (int) engine.getState();
-    logEntry.rate  = getCurrentRate();
+    logEntry.engage = stopPos >= 0 ? 1.0f : 0.0f;
+    logEntry.rate   = getCurrentRate();
+    logEntry.extra  = (double) stopPos;
     diagnostics.push (logEntry);
+}
+
+void TocadiscosStopProcessor::setStopPosition (int64_t samples)
+{
+    stopPosition.store (samples);
+    apvts.state.setProperty (stopPositionProperty, juce::String ((juce::int64) samples), nullptr);
 }
 
 juce::AudioProcessorEditor* TocadiscosStopProcessor::createEditor()
@@ -168,7 +161,11 @@ void TocadiscosStopProcessor::setStateInformation (const void* data, int sizeInB
 {
     if (auto xml = getXmlFromBinary (data, sizeInBytes))
         if (xml->hasTagName (apvts.state.getType()))
+        {
             apvts.replaceState (juce::ValueTree::fromXml (*xml));
+            const auto saved = apvts.state.getProperty (stopPositionProperty, "-1").toString();
+            stopPosition.store (saved.getLargeIntValue());
+        }
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()

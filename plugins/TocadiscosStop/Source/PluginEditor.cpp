@@ -88,26 +88,57 @@ TocadiscosStopEditor::TocadiscosStopEditor (TocadiscosStopProcessor& p)
     lnf.setColour (juce::TextButton::buttonOnColourId, Colours::accent);
     lnf.setColour (juce::TextButton::textColourOffId, Colours::text);
     lnf.setColour (juce::TextButton::textColourOnId, juce::Colours::black);
+    lnf.setColour (juce::TextEditor::backgroundColourId, Colours::panel);
+    lnf.setColour (juce::TextEditor::textColourId, Colours::text);
+    lnf.setColour (juce::TextEditor::outlineColourId, juce::Colour (0xff3d3e44));
+    lnf.setColour (juce::TextEditor::focusedOutlineColourId, Colours::accent);
     setLookAndFeel (&lnf);
 
     addAndMakeVisible (vinyl);
 
-    stopButton.setClickingTogglesState (true);
-    stopButton.setTooltip ("Activa para que el disco frene; desactiva para que vuelva a girar. Se puede automatizar.");
-    addAndMakeVisible (stopButton);
-    stopAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (p.apvts, ParamIDs::engage, stopButton);
+    markButton.setColour (juce::TextButton::buttonColourId, Colours::accent);
+    markButton.setColour (juce::TextButton::textColourOffId, juce::Colours::black);
+    markButton.setTooltip (juce::String::fromUTF8 ("Pulsa mientras reproduces: el disco frenar\xc3\xa1 en ese punto cada vez que pase por ah\xc3\xad."));
+    markButton.onClick = [this] { markHere(); };
+    addAndMakeVisible (markButton);
 
-    setupKnob (stopTime,  ParamIDs::stopTime,  "Frenado");
-    setupKnob (curve,     ParamIDs::curve,     "Curva");
-    setupKnob (startTime, ParamIDs::startTime, "Arranque");
-    setupKnob (tone,      ParamIDs::tone,      "Oscurecer");
-    setupKnob (fade,      ParamIDs::fade,      "Desvanecer");
+    pointLabel.setText ("Punto de parada", juce::dontSendNotification);
+    addAndMakeVisible (pointLabel);
 
-    setSize (620, 340);
+    timecodeEditor.setJustification (juce::Justification::centred);
+    timecodeEditor.setFont (juce::FontOptions (16.0f));
+    timecodeEditor.setTooltip ("Escribe el codigo de tiempo (HH:MM:SS:FF) y pulsa Intro.");
+    timecodeEditor.onReturnKey = [this] { applyTypedTimecode(); };
+    timecodeEditor.onFocusLost = [this] { applyTypedTimecode(); };
+    timecodeEditor.onEscapeKey = [this] { shownStopPosition = -2; refreshTimecode(); };
+    addAndMakeVisible (timecodeEditor);
+
+    minusButton.setTooltip ("Un fotograma antes");
+    plusButton.setTooltip  ("Un fotograma despues");
+    clearButton.setTooltip ("Quitar el punto de parada (la musica suena normal)");
+    minusButton.onClick = [this] { nudge (-1); };
+    plusButton.onClick  = [this] { nudge (+1); };
+    clearButton.onClick = [this] { processor.setStopPosition (-1); };
+    addAndMakeVisible (minusButton);
+    addAndMakeVisible (plusButton);
+    addAndMakeVisible (clearButton);
+
+    hintLabel.setFont (juce::FontOptions (12.0f));
+    addAndMakeVisible (hintLabel);
+
+    setupKnob (stopTime, ParamIDs::stopTime, "Frenado");
+    setupKnob (curve,    ParamIDs::curve,    "Curva");
+    setupKnob (tone,     ParamIDs::tone,     "Oscurecer");
+    setupKnob (fade,     ParamIDs::fade,     "Desvanecer");
+
+    setSize (620, 420);
+    timerCallback();
+    startTimerHz (10);
 }
 
 TocadiscosStopEditor::~TocadiscosStopEditor()
 {
+    stopTimer();
     setLookAndFeel (nullptr);
 }
 
@@ -123,6 +154,76 @@ void TocadiscosStopEditor::setupKnob (Knob& k, const char* paramID, const juce::
     addAndMakeVisible (k.label);
 }
 
+void TocadiscosStopEditor::markHere()
+{
+    const auto pos = processor.getLastPosition();
+    if (pos >= 0)
+        processor.setStopPosition (pos);
+}
+
+void TocadiscosStopEditor::nudge (int frames)
+{
+    const auto current = processor.getStopPosition();
+    if (current < 0)
+        return;
+    const auto step = Timecode::frameLength (processor.getHostSampleRate(), processor.getHostFrameRate());
+    processor.setStopPosition (juce::jmax ((int64_t) 0, current + frames * step));
+}
+
+void TocadiscosStopEditor::applyTypedTimecode()
+{
+    const auto text = timecodeEditor.getText().trim();
+    if (text.isEmpty())
+    {
+        processor.setStopPosition (-1);
+        return;
+    }
+
+    const auto samples = Timecode::parse (text.toStdString(), processor.getHostSampleRate(), processor.getHostFrameRate());
+    if (samples >= 0)
+        processor.setStopPosition (samples);
+
+    shownStopPosition = -2; // volver a mostrar el valor válido
+    refreshTimecode();
+}
+
+void TocadiscosStopEditor::refreshTimecode()
+{
+    const auto pos = processor.getStopPosition();
+    if (pos == shownStopPosition || timecodeEditor.hasKeyboardFocus (true))
+        return;
+
+    shownStopPosition = pos;
+    timecodeEditor.setText (pos >= 0 ? juce::String (Timecode::format (pos, processor.getHostSampleRate(), processor.getHostFrameRate()))
+                                     : juce::String(),
+                            juce::dontSendNotification);
+}
+
+void TocadiscosStopEditor::timerCallback()
+{
+    const bool hasPoint   = processor.getStopPosition() >= 0;
+    const bool hasPlayed  = processor.getLastPosition() >= 0;
+    const bool knowsRate  = processor.getHostSampleRate() > 0.0;
+
+    markButton.setEnabled (hasPlayed);
+    timecodeEditor.setEnabled (knowsRate);
+    minusButton.setEnabled (hasPoint);
+    plusButton.setEnabled (hasPoint);
+    clearButton.setEnabled (hasPoint);
+
+    if (! hasPlayed)
+        hintLabel.setText (juce::String::fromUTF8 ("Reproduce la l\xc3\xadnea de tiempo y pulsa PARAR AQU\xc3\x8d en el momento en que quieras que frene."),
+                           juce::dontSendNotification);
+    else if (! hasPoint)
+        hintLabel.setText (juce::String::fromUTF8 ("Sin punto de parada: la m\xc3\xbasica suena normal. Pulsa PARAR AQU\xc3\x8d mientras reproduces."),
+                           juce::dontSendNotification);
+    else
+        hintLabel.setText (juce::String::fromUTF8 ("El disco frena en ese punto en cada reproducci\xc3\xb3n y en el render. Aj\xc3\xbastalo con -1 / +1 o escribi\xc3\xa9ndolo."),
+                           juce::dontSendNotification);
+
+    refreshTimecode();
+}
+
 void TocadiscosStopEditor::paint (juce::Graphics& g)
 {
     g.fillAll (Colours::background);
@@ -136,18 +237,19 @@ void TocadiscosStopEditor::paint (juce::Graphics& g)
 
     g.setFont (juce::FontOptions (10.0f));
     g.drawText ("Diagnostico en Documentos: " + processor.diagnostics.getFileName(),
-                270, getHeight() - 18, getWidth() - 290, 14, juce::Justification::centredRight);
+                20, getHeight() - 16, getWidth() - 40, 12, juce::Justification::centredRight);
 
     g.setColour (Colours::panel);
-    g.fillRoundedRectangle (juce::Rectangle<float> (270.0f, 50.0f, (float) getWidth() - 290.0f, (float) getHeight() - 70.0f), 8.0f);
+    g.fillRoundedRectangle (juce::Rectangle<float> (270.0f, 50.0f, (float) getWidth() - 290.0f, 250.0f), 8.0f);
+    g.fillRoundedRectangle (juce::Rectangle<float> (14.0f, 312.0f, (float) getWidth() - 34.0f, 80.0f), 8.0f);
 }
 
 void TocadiscosStopEditor::resized()
 {
-    vinyl.setBounds (14, 48, 240, 220);
-    stopButton.setBounds (44, 280, 180, 40);
+    vinyl.setBounds (14, 48, 240, 200);
+    markButton.setBounds (34, 256, 200, 42);
 
-    auto panel = juce::Rectangle<int> (270, 50, getWidth() - 290, getHeight() - 70).reduced (8);
+    auto panel = juce::Rectangle<int> (270, 50, getWidth() - 290, 250).reduced (8);
     auto top    = panel.removeFromTop (panel.getHeight() / 2);
     auto bottom = panel;
 
@@ -157,12 +259,21 @@ void TocadiscosStopEditor::resized()
         k.slider.setBounds (r);
     };
 
-    const int w3 = top.getWidth() / 3;
-    place (stopTime,  top.removeFromLeft (w3));
-    place (curve,     top.removeFromLeft (w3));
-    place (startTime, top);
+    const int w2 = top.getWidth() / 2;
+    place (stopTime, top.removeFromLeft (w2));
+    place (curve,    top);
+    place (tone,     bottom.removeFromLeft (w2));
+    place (fade,     bottom);
 
-    const int w2 = bottom.getWidth() / 2;
-    place (tone, bottom.removeFromLeft (w2).reduced (w2 / 6, 0));
-    place (fade, bottom.reduced (w2 / 6, 0));
+    auto row = juce::Rectangle<int> (26, 322, getWidth() - 58, 30);
+    pointLabel.setBounds (row.removeFromLeft (120));
+    timecodeEditor.setBounds (row.removeFromLeft (150));
+    row.removeFromLeft (10);
+    minusButton.setBounds (row.removeFromLeft (44));
+    row.removeFromLeft (6);
+    plusButton.setBounds (row.removeFromLeft (44));
+    row.removeFromLeft (10);
+    clearButton.setBounds (row.removeFromLeft (80));
+
+    hintLabel.setBounds (26, 356, getWidth() - 58, 30);
 }

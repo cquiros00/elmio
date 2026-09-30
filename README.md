@@ -7,42 +7,48 @@ que es el formato de plugins de audio que admite Resolve Studio.
 ## 1. Tocadiscos Stop
 
 Simula que pulsas el botón de parada de un tocadiscos: el plato pierde velocidad poco a poco,
-la música baja de tono y de tempo a la vez y se apaga hasta el silencio. Al soltar el botón el
-disco vuelve a arrancar.
+la música baja de tono y de tempo a la vez y se apaga hasta el silencio.
 
-### Parámetros (todos editables y automatizables)
+Marcas **un punto de la línea de tiempo** y el disco frena ahí, siempre igual: en cada
+reproducción, tantas veces como la revises, y en el render final.
+
+### Controles
 
 | Control | Qué hace | Rango | Por defecto |
 |---|---|---|---|
-| **PARAR** | Activado: el disco frena hasta pararse. Desactivado: el disco vuelve a girar. | apagado / encendido | apagado |
+| **PARAR AQUÍ** | Pulsa mientras reproduces: guarda ese punto de la línea de tiempo como punto de parada. | — | — |
+| **Punto de parada** | Código de tiempo donde empieza a frenar. Se puede escribir (`HH:MM:SS:FF` y Intro), ajustar con **-1 / +1** fotograma o borrar con **Quitar**. Se guarda con el proyecto. | — | sin punto |
 | **Frenado** | Cuánto tarda el disco en pararse del todo. | 0,1 – 10 s | 2,5 s |
 | **Curva** | Forma del frenado. `1` = natural (fricción real, pérdida de velocidad constante). Menos de 1 = *plato pesado* (aguanta la velocidad y cae al final). Más de 1 = *freno* (cae de golpe al principio y se arrastra al final). | 0,25 – 4 | 1 |
-| **Arranque** | Cuánto tarda en recuperar la velocidad al desactivar PARAR. `0` = vuelve al instante. | 0 – 5 s | 0,6 s |
 | **Oscurecer** | Filtro que va quitando agudos a medida que baja la velocidad (sonido más "apagado"). | 0 – 100 % | 40 % |
 | **Desvanecer** | Cuánto baja el volumen junto con la velocidad. | 0 – 100 % | 50 % |
+
+Sin punto de parada el plugin no cambia nada. Una vez parado el disco, la pista queda en
+silencio hasta el final: si quieres que la música vuelva más adelante, corta el clip y deja
+el resto en otra pista sin el efecto.
 
 El disco dibujado en la interfaz gira a la velocidad real del efecto, así que se ve cómo frena.
 
 ### Cómo funciona por dentro
 
-El audio que entra se guarda en un buffer. Mientras PARAR está apagado la salida es la señal
-original, sin ningún cambio ni latencia. Al activar PARAR, un cabezal de lectura recorre ese
-buffer cada vez más despacio (de 100 % a 0 %), con interpolación cúbica, que es justo lo que le
-pasa a una aguja sobre un disco que frena. Al volver a arrancar, cuando el disco alcanza la
-velocidad normal, se hace un fundido de 30 ms de vuelta al audio en directo.
+El audio que entra se guarda en un buffer indexado por su posición en la línea de tiempo.
+Antes del punto de parada la salida es la señal original, sin cambios ni latencia. Desde el
+punto de parada, un cabezal de lectura recorre ese buffer cada vez más despacio (de 100 % a
+0 %), con interpolación cúbica, que es justo lo que le pasa a una aguja sobre un disco que
+frena.
 
-El frenado siempre se oye entero: si empiezas a reproducir desde un punto donde PARAR ya está
-activado, el disco frena desde ese momento. Para escuchar el efecto tal y como quedará,
-reproduce desde unos segundos antes del punto de parada.
+La posición del cabezal se calcula a partir de la posición en la línea de tiempo, no de lo que
+sonó antes. Es importante porque DaVinci Resolve reinicia el plugin cada vez que pulsas
+reproducir y solo le envía audio mientras reproduce (lo vimos en el registro de diagnóstico):
+un efecto que dependiera del historial solo se oiría bien la primera vez.
 
-Debajo del disco, la interfaz muestra **Reinicios del host**: cuántas veces ha reiniciado
-Resolve el procesado del plugin. Es solo un dato de diagnóstico.
+Si empiezas a reproducir en mitad del frenado, se oye el frenado desde ese punto; después del
+frenado, silencio.
 
-**Versión de diagnóstico:** mientras se ajusta el comportamiento en Resolve, cada instancia del
-plugin guarda un registro en tu carpeta **Documentos** (`TocadiscosStop-diagnostico-….txt`)
-con lo que hace el host: posición del cabezal, estado de reproducción, valor de PARAR y
-reinicios. El nombre del archivo aparece abajo a la derecha en la ventana del plugin. No
-contiene audio ni datos personales; puedes borrarlo cuando quieras.
+**Diagnóstico:** cada instancia del plugin guarda un registro en tu carpeta **Documentos**
+(`TocadiscosStop-diagnostico-….txt`) con lo que hace el host: posición del cabezal, estado de
+reproducción y reinicios. El nombre del archivo aparece abajo a la derecha en la ventana del
+plugin. No contiene audio ni datos personales; puedes borrarlo cuando quieras.
 
 ---
 
@@ -93,26 +99,17 @@ sudo xattr -dr com.apple.quarantine "/Library/Audio/Plug-Ins/VST3/Tocadiscos Sto
 
 ## Uso en Resolve
 
-### En Fairlight, con automatización
-
 1. En la página **Fairlight**, en el mezclador, pulsa **+** en la sección *Effects* de la pista
    de música y elige **Tocadiscos Stop** (también puedes arrastrarlo desde la biblioteca a la
    cabecera de la pista).
-2. Ajusta **Frenado**, **Curva**, **Oscurecer** y **Desvanecer** a tu gusto.
-3. Activa la barra de **Automatización** de Fairlight, habilita la automatización de plugins y
-   pon la pista en modo **Latch** (no *Touch*: en *Touch* el botón vuelve a apagarse en cuanto
-   sueltas el ratón, y el disco solo frena una fracción de segundo).
-4. Reproduce y pulsa **PARAR** en la ventana del plugin justo en el momento en que quieres que
-   el disco empiece a frenar. Resolve graba ese momento como automatización.
-5. Si quieres que la música vuelva, pulsa otra vez **PARAR** para soltarlo.
+2. Reproduce unos segundos antes de donde quieres el efecto y pulsa **PARAR AQUÍ** en la
+   ventana del plugin en el momento en que quieres que el disco empiece a frenar.
+3. Vuelve atrás y reproduce: el disco frena en ese punto cada vez.
+4. Ajusta el punto con **-1 / +1** (un fotograma) o escribe el código de tiempo exacto, y
+   ajusta **Frenado**, **Curva**, **Oscurecer** y **Desvanecer** a tu gusto.
 
-Después puedes mover el punto de automatización en la línea de tiempo para ajustar el momento
-exacto, o dibujarlo a mano en el carril de automatización del parámetro **Parar**.
-
-### Solo al final de la canción
-
-Basta con un único cambio de automatización: **Parar** apagado antes del punto elegido y
-encendido desde ahí hasta el final. Deja **Arranque** como quieras, no se usará.
+El punto de parada es una posición de la línea de tiempo: si mueves el clip de música, vuelve a
+marcarlo.
 
 ### Consejos
 
@@ -153,17 +150,19 @@ g++ -std=c++17 -O2 -I plugins/TocadiscosStop/Source tests/render_test.cpp -o ren
 ./render_test resultado.wav mi_cancion.wav  # tu propio archivo (WAV 16/24 bits o float)
 ```
 
-Activa PARAR al 35 % del audio y lo suelta al 75 %.
+Pone el punto de parada al 35 % del audio.
 
 ## Estructura
 
 ```
 plugins/TocadiscosStop/Source/
   TurntableEngine.h    motor DSP (sin dependencias, reutilizable)
-  PluginProcessor.*    parámetros, automatización y sincronización con el transporte
+  PluginProcessor.*    parámetros, punto de parada y posición en la línea de tiempo
+  Timecode.h           conversión entre muestras y código de tiempo
+  DiagnosticLog.h      registro de diagnóstico del host
   PluginEditor.*       interfaz con el disco giratorio
 tests/render_test.cpp     prueba offline del motor (genera un WAV)
-tests/processor_test.cpp  prueba del plugin con un host simulado
+tests/processor_test.cpp  prueba del plugin imitando a DaVinci Resolve
 ```
 
 ## Licencia

@@ -5,13 +5,18 @@
 // No depende de JUCE: se puede usar desde el plugin y desde las pruebas
 // offline (tests/render_test.cpp).
 //
-// Idea: todo el audio que entra se escribe en un buffer circular. Mientras el
-// efecto está en reposo la salida es la entrada tal cual. Al activar "Parar",
-// un cabezal de lectura empieza a recorrer el buffer a una velocidad que cae
-// de 1.0 a 0.0 (igual que un plato que pierde velocidad), por lo que el tono y
-// el tempo bajan juntos hasta el silencio. Al soltar "Parar" el plato vuelve a
-// arrancar y, al llegar a velocidad normal, se hace un fundido corto de vuelta
-// al audio en directo.
+// El efecto depende solo de la posición en la línea de tiempo, no de lo que
+// haya sonado antes: el disco frena siempre en el mismo punto (`stopPos`), en
+// cada reproducción y en el render final. DaVinci Resolve reinicia el plugin
+// cada vez que se pulsa reproducir y solo le envía audio mientras reproduce,
+// así que un efecto que dependiera del historial se oiría una sola vez.
+//
+// Funcionamiento: el audio que entra se guarda en un buffer indexado por
+// posición absoluta. Antes del punto de parada la salida es la entrada tal
+// cual. Desde el punto de parada, un cabezal de lectura recorre ese buffer a
+// una velocidad que cae de 1 a 0 en `stopSeconds`, así que tono y tempo bajan
+// juntos hasta el silencio. La posición del cabezal se calcula con una fórmula
+// cerrada a partir de la posición actual, por lo que es la misma en cada pasada.
 
 #include <algorithm>
 #include <atomic>
@@ -24,195 +29,137 @@ class TurntableEngine
 public:
     struct Params
     {
-        float stopSeconds  = 2.5f;  // duración del frenado
-        float curve        = 1.0f;  // forma del frenado: 1 = lineal (fricción real)
-        float startSeconds = 0.6f;  // duración del arranque al soltar (0 = instantáneo)
-        float tone         = 0.4f;  // 0..1, cuánto se oscurece el sonido al frenar
-        float fade         = 0.5f;  // 0..1, cuánto baja el volumen con la velocidad
+        float stopSeconds = 2.5f;  // duración del frenado
+        float curve       = 1.0f;  // forma del frenado: 1 = lineal (fricción real)
+        float tone        = 0.4f;  // 0..1, cuánto se oscurece el sonido al frenar
+        float fade        = 0.5f;  // 0..1, cuánto baja el volumen con la velocidad
     };
 
-    enum class State { Running, SpinningDown, Stopped, SpinningUp, CatchingUp };
-
-    static constexpr double maxLagSeconds = 16.0;
+    static constexpr double maxStopSeconds = 10.0;
 
     void prepare (double newSampleRate, int newNumChannels)
     {
         sampleRate  = newSampleRate;
         numChannels = std::max (1, newNumChannels);
 
-        bufferSize = (int64_t) std::ceil (maxLagSeconds * sampleRate) + 16;
+        bufferSize = (int64_t) std::ceil ((maxStopSeconds + 1.0) * sampleRate) + 16;
         buffers.assign ((size_t) numChannels, std::vector<float> ((size_t) bufferSize, 0.0f));
         lp1.assign ((size_t) numChannels, 0.0f);
         lp2.assign ((size_t) numChannels, 0.0f);
 
-        catchUpLength = std::max (1, (int) (0.030 * sampleRate)); // fundido de 30 ms
         gainSmoothCoef = (float) std::exp (-1.0 / (0.004 * sampleRate));
-
-        snapTo (false);
+        expectedPos = -1;
     }
 
-    // Coloca el motor directamente en un estado estable, sin rampas. Se usa al
-    // empezar la reproducción o al saltar en la línea de tiempo, para que el
-    // resultado no dependa de lo que sonó antes.
-    void snapTo (bool engaged)
-    {
-        for (auto& b : buffers)
-            std::fill (b.begin(), b.end(), 0.0f);
-        std::fill (lp1.begin(), lp1.end(), 0.0f);
-        std::fill (lp2.begin(), lp2.end(), 0.0f);
-
-        writeCount    = 0;
-        readPos       = 0.0;
-        progress      = 0.0;
-        catchUpPos    = 0;
-        state         = engaged ? State::Stopped : State::Running;
-        rate          = engaged ? 0.0 : 1.0;
-        smoothedGain  = engaged ? 0.0f : 1.0f;
-        currentRate.store ((float) rate);
-    }
-
-    // Procesa el audio en el sitio. `channels` apunta a `numChans` canales de
-    // `numSamples` muestras. `engaged` es el estado del botón "Parar".
-    void process (float* const* channels, int numChans, int numSamples, bool engaged, const Params& p)
+    // Procesa el audio en el sitio. `blockPos` es la posición (en muestras) de
+    // la primera muestra del bloque en la línea de tiempo. `stopPos` es el
+    // punto donde empieza a frenar, o -1 si no hay punto de parada.
+    void process (float* const* channels, int numChans, int numSamples,
+                  int64_t blockPos, int64_t stopPos, const Params& p)
     {
         numChans = std::min (numChans, numChannels);
-        const double stopInc  = 1.0 / std::max (1.0, (double) p.stopSeconds * sampleRate);
-        const bool   instantStart = p.startSeconds < 0.001f;
-        const double startInc = instantStart ? 1.0 : 1.0 / ((double) p.startSeconds * sampleRate);
-        const double curve    = std::clamp ((double) p.curve, 0.1, 10.0);
+
+        // Un bloque que no sigue al anterior es una reproducción nueva (o un
+        // salto): el audio guardado de antes no sirve.
+        if (blockPos != expectedPos)
+        {
+            validStart   = blockPos;
+            offsetKnown  = false;
+            freshSegment = true;
+        }
+        expectedPos = blockPos + numSamples;
+
+        const double stopLen = std::clamp ((double) p.stopSeconds, 0.05, maxStopSeconds) * sampleRate;
+        const double curve   = std::clamp ((double) p.curve, 0.1, 10.0);
+
+        float lastRate = 1.0f;
 
         for (int i = 0; i < numSamples; ++i)
         {
-            // 1) Guardar la entrada en el buffer circular.
-            const int64_t w = writeCount % bufferSize;
+            const int64_t pos = blockPos + i;
+
+            // 1) Guardar la entrada.
+            const int64_t w = wrap (pos);
             for (int c = 0; c < numChans; ++c)
                 buffers[(size_t) c][(size_t) w] = channels[c][i];
-            ++writeCount;
-            const double live = (double) (writeCount - 1); // posición de la muestra recién escrita
+            validStart = std::max (validStart, pos - (bufferSize - 8));
 
-            // 2) Transiciones según el botón.
-            if (engaged)
-            {
-                if (state == State::Running)
-                {
-                    readPos  = live;
-                    progress = 0.0;
-                    state    = State::SpinningDown;
-                }
-                else if (state == State::SpinningUp || state == State::CatchingUp)
-                {
-                    progress = 1.0 - std::pow (rate, 1.0 / curve); // continuar desde la velocidad actual
-                    state    = State::SpinningDown;
-                }
-            }
-            else
-            {
-                if (state == State::Stopped)
-                {
-                    // El disco vuelve a girar desde el punto en directo.
-                    readPos  = live;
-                    progress = 0.0;
-                    rate     = 0.0;
-                    state    = State::SpinningUp;
-                }
-                else if (state == State::SpinningDown)
-                {
-                    progress = 1.0 - std::pow (1.0 - rate, 1.0 / spinUpShape);
-                    state    = State::SpinningUp;
-                }
-            }
-
-            // 3) Avanzar la curva de velocidad.
-            if (state == State::SpinningDown)
-            {
-                progress += stopInc;
-                if (progress >= 1.0) { progress = 1.0; rate = 0.0; state = State::Stopped; }
-                else                  rate = std::pow (1.0 - progress, curve);
-            }
-            else if (state == State::SpinningUp)
-            {
-                progress += startInc;
-                if (progress >= 1.0)
-                {
-                    progress   = 1.0;
-                    rate       = 1.0;
-                    state      = State::CatchingUp;
-                    catchUpPos = 0;
-                }
-                else
-                {
-                    rate = 1.0 - std::pow (1.0 - progress, spinUpShape);
-                }
-            }
-
-            // Nunca dejar que el cabezal se quede más atrás de lo que cabe en el buffer.
-            const double maxLag = (double) (bufferSize - 8);
-            if (live - readPos > maxLag)
-                readPos = live - maxLag;
-
-            // 4) Generar la salida.
-            if (state == State::Running)
+            // 2) Antes del punto de parada: sin cambios.
+            if (stopPos < 0 || pos < stopPos)
             {
                 for (int c = 0; c < numChans; ++c)
                 {
                     lp1[(size_t) c] = lp2[(size_t) c] = channels[c][i];
                     channels[c][i] *= smoothGain (1.0f, c == 0);
                 }
-                readPos = live;
-                currentRate.store (1.0f, std::memory_order_relaxed);
+                lastRate = 1.0f;
+                freshSegment = false;
                 continue;
+            }
+
+            // 3) Frenando o parado.
+            const double x = (double) (pos - stopPos) / stopLen;
+            double rate = 0.0;
+            double readPos = 0.0;
+            if (x < 1.0)
+            {
+                rate = std::pow (1.0 - x, curve);
+                // Integral de la velocidad: cuánto ha avanzado el disco desde stopPos.
+                readPos = (double) stopPos + stopLen * (1.0 - std::pow (1.0 - x, curve + 1.0)) / (curve + 1.0);
+
+                // Si la reproducción empezó después del punto de parada no
+                // tenemos el audio de ese tramo: se desplaza el cabezal para
+                // empezar a leer desde lo primero que sí tenemos.
+                if (! offsetKnown)
+                {
+                    readOffset  = std::max (0.0, (double) validStart - readPos);
+                    offsetKnown = true;
+                }
+                readPos = std::min (readPos + readOffset, (double) pos);
             }
 
             const float targetGain = computeGain (rate, p.fade);
             const float lpCoef     = computeFilterCoef (rate, p.tone);
 
-            float xfade = 0.0f;
-            if (state == State::CatchingUp)
-                xfade = (float) catchUpPos / (float) catchUpLength;
-
             for (int c = 0; c < numChans; ++c)
             {
-                const float dry = channels[c][i];
-                float wet = state == State::Stopped ? 0.0f : readInterpolated ((size_t) c, readPos, live);
+                float wet = x < 1.0 ? readInterpolated ((size_t) c, readPos, pos) : 0.0f;
 
                 // Filtro paso bajo de 2 polos que se va cerrando con la velocidad.
                 auto& s1 = lp1[(size_t) c];
                 auto& s2 = lp2[(size_t) c];
+                if (freshSegment) { s1 = s2 = wet; }
                 s1 = wet + lpCoef * (s1 - wet);
                 s2 = s1  + lpCoef * (s2 - s1);
-                wet = s2;
 
-                const float g = smoothGain (targetGain, c == 0);
-                wet *= g;
-
-                channels[c][i] = state == State::CatchingUp ? wet * (1.0f - xfade) + dry * xfade : wet;
+                channels[c][i] = s2 * smoothGain (targetGain, c == 0);
             }
-
-            if (state != State::Stopped)
-                readPos += rate;
-
-            if (state == State::CatchingUp && ++catchUpPos >= catchUpLength)
-            {
-                state   = State::Running;
-                readPos = live;
-            }
-
-            currentRate.store ((float) rate, std::memory_order_relaxed);
+            lastRate = (float) rate;
+            freshSegment = false;
         }
-    }
 
-    State getState() const noexcept { return state; }
+        if (numSamples > 0)
+            currentRate.store (lastRate, std::memory_order_relaxed);
+    }
 
     // Velocidad actual del plato (0..1). Se puede leer desde otro hilo (la interfaz).
     std::atomic<float> currentRate { 1.0f };
 
 private:
-    static constexpr double spinUpShape = 1.6; // el motor acelera rápido y se estabiliza al final
+    int64_t wrap (int64_t pos) const noexcept
+    {
+        const int64_t m = pos % bufferSize;
+        return m < 0 ? m + bufferSize : m;
+    }
 
     float smoothGain (float target, bool advance)
     {
         if (advance)
+        {
+            if (freshSegment)
+                smoothedGain = target;
             smoothedGain = target + gainSmoothCoef * (smoothedGain - target);
+        }
         return smoothedGain;
     }
 
@@ -237,16 +184,15 @@ private:
 
     float sampleAt (size_t c, int64_t index, int64_t newest) const
     {
-        index = std::clamp (index, std::max<int64_t> (0, newest - bufferSize + 1), newest);
-        return buffers[c][(size_t) (index % bufferSize)];
+        index = std::clamp (index, validStart, newest);
+        return buffers[c][(size_t) wrap (index)];
     }
 
     // Interpolación cúbica (Hermite) entre muestras del buffer.
-    float readInterpolated (size_t c, double pos, double live) const
+    float readInterpolated (size_t c, double pos, int64_t newest) const
     {
-        const int64_t newest = (int64_t) live;
-        const int64_t i0     = (int64_t) std::floor (pos);
-        const float   f      = (float) (pos - (double) i0);
+        const int64_t i0 = (int64_t) std::floor (pos);
+        const float   f  = (float) (pos - (double) i0);
 
         const float xm1 = sampleAt (c, i0 - 1, newest);
         const float x0  = sampleAt (c, i0,     newest);
@@ -264,16 +210,14 @@ private:
 
     std::vector<std::vector<float>> buffers;
     std::vector<float> lp1, lp2;
-    int64_t bufferSize = 1;
-    int64_t writeCount = 0;
-    double  readPos    = 0.0;
+    int64_t bufferSize  = 1;
+    int64_t expectedPos = -1;
+    int64_t validStart  = 0;
 
-    State  state    = State::Running;
-    double rate     = 1.0;
-    double progress = 0.0;
+    bool   offsetKnown  = false;
+    double readOffset   = 0.0;
+    bool   freshSegment = true;
 
-    int   catchUpPos     = 0;
-    int   catchUpLength  = 1;
     float smoothedGain   = 1.0f;
     float gainSmoothCoef = 0.0f;
 };
