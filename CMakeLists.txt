@@ -27,4 +27,15 @@ if(ELMIO_BUILD_TESTS)
     target_include_directories(render_test PRIVATE plugins/TocadiscosStop/Source)
     enable_testing()
     add_test(NAME tocadiscos_render COMMAND render_test ${CMAKE_BINARY_DIR}/tocadiscos_stop_demo.wav)
+
+    # Prueba del plugin completo con un host simulado.
+    # Reutiliza el código ya compilado del plugin (incluido JUCE).
+    add_executable(processor_test tests/processor_test.cpp)
+    target_link_libraries(processor_test PRIVATE TocadiscosStop)
+    target_include_directories(processor_test PRIVATE
+        plugins/TocadiscosStop/Source
+        $<TARGET_PROPERTY:TocadiscosStop,INCLUDE_DIRECTORIES>)
+    target_compile_definitions(processor_test PRIVATE
+        $<TARGET_PROPERTY:TocadiscosStop,COMPILE_DEFINITIONS>)
+    add_test(NAME tocadiscos_processor COMMAND processor_test)
 endif()

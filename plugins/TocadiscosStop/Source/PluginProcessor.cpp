@@ -26,7 +26,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout TocadiscosStopProcessor::cre
     layout.add (std::make_unique<AudioParameterBool> (ParameterID { ParamIDs::engage, 1 }, "Parar", false));
 
     layout.add (std::make_unique<AudioParameterFloat> (ParameterID { ParamIDs::stopTime, 1 }, "Tiempo de frenado",
-        NormalisableRange<float> (0.1f, 10.0f, 0.01f, 0.5f), 1.5f,
+        NormalisableRange<float> (0.1f, 10.0f, 0.01f, 0.5f), 2.5f,
         AudioParameterFloatAttributes().withLabel ("s").withStringFromValueFunction (seconds)));
 
     layout.add (std::make_unique<AudioParameterFloat> (ParameterID { ParamIDs::curve, 1 }, "Curva",
@@ -50,7 +50,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout TocadiscosStopProcessor::cre
         AudioParameterFloatAttributes().withStringFromValueFunction (percent)));
 
     layout.add (std::make_unique<AudioParameterFloat> (ParameterID { ParamIDs::fade, 1 }, "Desvanecer",
-        NormalisableRange<float> (0.0f, 1.0f, 0.01f), 0.3f,
+        NormalisableRange<float> (0.0f, 1.0f, 0.01f), 0.5f,
         AudioParameterFloatAttributes().withStringFromValueFunction (percent)));
 
     return layout;
@@ -88,20 +88,25 @@ void TocadiscosStopProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
     // plato directamente en el estado que marca la automatización: así, al
     // reproducir desde un punto donde "Parar" ya está activo, se oye silencio
     // en vez de un frenado que no corresponde.
+    //
+    // Solo cuenta como salto una diferencia grande (medio segundo): hay hosts,
+    // como DaVinci Resolve, que informan de la posición a saltos (por
+    // fotograma), y eso no debe cortar un frenado en curso.
     if (auto* ph = getPlayHead())
     {
         if (auto pos = ph->getPosition())
         {
             const bool playing = pos->getIsPlaying();
+            if (playing && ! wasPlaying)
+                needsSnap = true;
+
             if (auto samplePos = pos->getTimeInSamples())
             {
-                if (playing && (! wasPlaying || (expectedSamplePos >= 0 && std::llabs (*samplePos - expectedSamplePos) > 64)))
+                const auto jumpThreshold = (int64_t) (0.5 * getSampleRate());
+                if (playing && wasPlaying && expectedSamplePos >= 0
+                    && std::llabs (*samplePos - expectedSamplePos) > jumpThreshold)
                     needsSnap = true;
                 expectedSamplePos = *samplePos + buffer.getNumSamples();
-            }
-            else if (playing && ! wasPlaying)
-            {
-                needsSnap = true;
             }
             wasPlaying = playing;
         }

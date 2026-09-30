@@ -24,11 +24,11 @@ class TurntableEngine
 public:
     struct Params
     {
-        float stopSeconds  = 1.5f;  // duración del frenado
+        float stopSeconds  = 2.5f;  // duración del frenado
         float curve        = 1.0f;  // forma del frenado: 1 = lineal (fricción real)
         float startSeconds = 0.6f;  // duración del arranque al soltar (0 = instantáneo)
         float tone         = 0.4f;  // 0..1, cuánto se oscurece el sonido al frenar
-        float fade         = 0.3f;  // 0..1, cuánto baja el volumen con la velocidad
+        float fade         = 0.5f;  // 0..1, cuánto baja el volumen con la velocidad
     };
 
     enum class State { Running, SpinningDown, Stopped, SpinningUp, CatchingUp };

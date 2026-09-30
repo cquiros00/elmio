@@ -15,11 +15,11 @@ disco vuelve a arrancar.
 | Control | Qué hace | Rango | Por defecto |
 |---|---|---|---|
 | **PARAR** | Activado: el disco frena hasta pararse. Desactivado: el disco vuelve a girar. | apagado / encendido | apagado |
-| **Frenado** | Cuánto tarda el disco en pararse del todo. | 0,1 – 10 s | 1,5 s |
+| **Frenado** | Cuánto tarda el disco en pararse del todo. | 0,1 – 10 s | 2,5 s |
 | **Curva** | Forma del frenado. `1` = natural (fricción real, pérdida de velocidad constante). Menos de 1 = *plato pesado* (aguanta la velocidad y cae al final). Más de 1 = *freno* (cae de golpe al principio y se arrastra al final). | 0,25 – 4 | 1 |
 | **Arranque** | Cuánto tarda en recuperar la velocidad al desactivar PARAR. `0` = vuelve al instante. | 0 – 5 s | 0,6 s |
 | **Oscurecer** | Filtro que va quitando agudos a medida que baja la velocidad (sonido más "apagado"). | 0 – 100 % | 40 % |
-| **Desvanecer** | Cuánto baja el volumen junto con la velocidad. | 0 – 100 % | 30 % |
+| **Desvanecer** | Cuánto baja el volumen junto con la velocidad. | 0 – 100 % | 50 % |
 
 El disco dibujado en la interfaz gira a la velocidad real del efecto, así que se ve cómo frena.
 
@@ -90,7 +90,8 @@ sudo xattr -dr com.apple.quarantine "/Library/Audio/Plug-Ins/VST3/Tocadiscos Sto
    cabecera de la pista).
 2. Ajusta **Frenado**, **Curva**, **Oscurecer** y **Desvanecer** a tu gusto.
 3. Activa la barra de **Automatización** de Fairlight, habilita la automatización de plugins y
-   pon la pista en modo **Touch** o **Latch**.
+   pon la pista en modo **Latch** (no *Touch*: en *Touch* el botón vuelve a apagarse en cuanto
+   sueltas el ratón, y el disco solo frena una fracción de segundo).
 4. Reproduce y pulsa **PARAR** en la ventana del plugin justo en el momento en que quieres que
    el disco empiece a frenar. Resolve graba ese momento como automatización.
 5. Si quieres que la música vuelva, pulsa otra vez **PARAR** para soltarlo.
@@ -151,7 +152,8 @@ plugins/TocadiscosStop/Source/
   TurntableEngine.h    motor DSP (sin dependencias, reutilizable)
   PluginProcessor.*    parámetros, automatización y sincronización con el transporte
   PluginEditor.*       interfaz con el disco giratorio
-tests/render_test.cpp  prueba offline
+tests/render_test.cpp     prueba offline del motor (genera un WAV)
+tests/processor_test.cpp  prueba del plugin con un host simulado
 ```
 
 ## Licencia
